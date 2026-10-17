@@ -19,6 +19,8 @@ from host.engine.contracts.commands import (
     GameLaunchPayload,
     ScreenFramePayload,
     UnlockPcPayload,
+    AppsListPayload,
+    OpenUrlPayload,
 )
 from host.engine.contracts.envelope import SignedEnvelope
 from host.core.storage.device_store import TrustedDeviceStore
@@ -37,11 +39,13 @@ from host.core.discovery.game_scanner import (
     scan_steam_games,
     scan_epic_games,
 )
+from host.core.discovery.app_scanner import scan_installed_apps
 from host.engine.handlers.media import execute_media_command, MediaExecutionError
 from host.engine.handlers.power import execute_power_command, PowerExecutionError
 from host.engine.handlers.apps import (
     execute_app_command,
     execute_game_launch,
+    execute_open_url,
     AppLaunchError,
 )
 from host.engine.handlers.screen import capture_screen_jpeg, ScreenCaptureError
@@ -164,14 +168,28 @@ class CommandDispatcher:
             elif envelope.command_id == CommandCatalog.UNLOCK_PC:
                 assert isinstance(parsed_payload, UnlockPcPayload)
                 execute_unlock_pc(parsed_payload.password, parsed_payload.username)
+            elif envelope.command_id == CommandCatalog.APPS_LIST:
+                assert isinstance(parsed_payload, AppsListPayload)
+                apps = scan_installed_apps()
+                if parsed_payload.query:
+                    q = parsed_payload.query.lower().strip()
+                    apps = [a for a in apps if q in a["name"].lower()]
+                extra_data = {"apps": apps}
+            elif envelope.command_id == CommandCatalog.OPEN_URL:
+                assert isinstance(parsed_payload, OpenUrlPayload)
+                opened = execute_open_url(parsed_payload.url)
+                extra_data = {"url": opened}
             else:
                 raise ValueError(f"Comando no soportado: {envelope.command_id}")
 
-            success_msg = (
-                "PC desbloqueado exitosamente."
-                if envelope.command_id == CommandCatalog.UNLOCK_PC
-                else f"Comando {envelope.command_id.value} ejecutado exitosamente."
-            )
+            if envelope.command_id == CommandCatalog.UNLOCK_PC:
+                success_msg = "PC desbloqueado exitosamente."
+            elif envelope.command_id == CommandCatalog.OPEN_URL:
+                success_msg = f"URL abierta en el navegador: {extra_data.get('url', '')}"
+            elif envelope.command_id == CommandCatalog.APPS_LIST:
+                success_msg = f"{len(extra_data.get('apps', []))} aplicaciones detectadas en el sistema."
+            else:
+                success_msg = f"Comando {envelope.command_id.value} ejecutado exitosamente."
 
             return ExecutionResult(
                 status=ExecutionStatus.SUCCESS,
@@ -185,7 +203,7 @@ class CommandDispatcher:
             return ExecutionResult(
                 status=ExecutionStatus.ERROR,
                 command_id=envelope.command_id.value,
-                message="Contraseña de Windows incorrecta.",
+                message="Contraseña o PIN de Windows incorrecta.",
                 error_code="INVALID_PASSWORD"
             )
         except (MediaExecutionError, PowerExecutionError, AppLaunchError, ScreenCaptureError, UnlockExecutionError) as e:

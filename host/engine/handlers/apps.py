@@ -1,10 +1,13 @@
 """
-Manejador seguro de lanzamiento de aplicaciones mediante identificadores registrados.
-Principio rector: Cero rutas a binarios arbitrarios. Ejecución delegada a protocolos oficiales.
+Manejador seguro de lanzamiento de aplicaciones y apertura de URLs.
+Principio rector: Cero rutas a binarios arbitrarios. Ejecución delegada a protocolos oficiales
+y accesos directos descubiertos del sistema.
 """
 
 import sys
 import ctypes
+import webbrowser
+import urllib.parse
 from ctypes import wintypes
 from typing import Optional
 
@@ -14,7 +17,7 @@ SW_SHOWNORMAL = 1
 
 
 class AppLaunchError(Exception):
-    """Excepción para errores al despachar la ejecución de una aplicación."""
+    """Excepción para errores al despachar la ejecución de una aplicación o URL."""
     pass
 
 
@@ -82,9 +85,34 @@ def execute_game_launch(platform: str, game_id: str) -> None:
 
 def execute_app_command(payload: AppLaunchPayload) -> None:
     """
-    Lanza una aplicación mediante el protocolo del sistema registrado (Compatibilidad heredada).
+    Lanza una aplicación mediante el protocolo del sistema registrado o acceso directo.
     """
-    if payload.platform != AppPlatform.STEAM:
+    if payload.platform == AppPlatform.STEAM:
+        if payload.app_id is None:
+            raise AppLaunchError("Falta app_id para plataforma STEAM.")
+        execute_game_launch("steam", str(payload.app_id))
+    elif payload.platform == AppPlatform.SYSTEM:
+        from host.core.discovery.app_scanner import launch_system_app
+        launch_system_app(target_path=payload.target_path, app_id=str(payload.app_id) if payload.app_id else None)
+    else:
         raise AppLaunchError(f"Plataforma de aplicación no soportada: {payload.platform}")
 
-    execute_game_launch("steam", str(payload.app_id))
+
+def execute_open_url(url: str) -> str:
+    """
+    Abre una URL estrictamente validada en el navegador web predeterminado del sistema.
+    Retorna la URL abierta.
+    """
+    raw = url.strip()
+    if not (raw.startswith("http://") or raw.startswith("https://")):
+        raw = f"https://{raw}"
+
+    parsed = urllib.parse.urlparse(raw)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise AppLaunchError(f"Esquema o formato de URL inválido: {url}")
+
+    try:
+        webbrowser.open(raw, new=2)
+        return raw
+    except Exception as e:
+        raise AppLaunchError(f"Error al abrir la URL en el navegador: {e}") from e

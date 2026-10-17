@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../transport/control_client.dart';
 import '../../services/pairing_client.dart';
@@ -9,6 +10,7 @@ import '../widgets/deck_button.dart';
 import 'scanner_screen.dart';
 import 'screen_viewer_screen.dart';
 import 'games_screen.dart';
+import 'apps_screen.dart';
 import '../../services/updater_service.dart';
 import 'package:ota_update/ota_update.dart';
 
@@ -84,11 +86,8 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    // Pausar/desconectar ordenadamente cuando la app pasa a background
-    if (state == AppLifecycleState.paused) {
-      _controlClient?.dispose();
-    } else if (state == AppLifecycleState.resumed) {
-      _controlClient?.connect();
+    if (state == AppLifecycleState.resumed) {
+      _controlClient?.ensureConnected();
     }
   }
 
@@ -223,7 +222,7 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Text(
-                  'Ingresa tu contraseña de Windows para autenticar y desbloquear la sesión:',
+                  'Introduce tu PIN de Windows Hello o contraseña de Windows para autenticar y desbloquear:',
                   style: TextStyle(color: Color(0xFF94A3B8), fontSize: 13),
                 ),
                 const SizedBox(height: 16),
@@ -233,7 +232,7 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
                   autofocus: true,
                   style: const TextStyle(color: Colors.white, fontSize: 14),
                   decoration: InputDecoration(
-                    hintText: 'Contraseña de Windows',
+                    hintText: 'PIN o Contraseña de Windows',
                     hintStyle: const TextStyle(color: Colors.white30, fontSize: 14),
                     filled: true,
                     fillColor: const Color(0xFF0F1117),
@@ -279,6 +278,120 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
             ],
           );
         },
+      ),
+    );
+  }
+
+  void _showOpenUrlDialog() {
+    final urlController = TextEditingController();
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF161A23),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Row(
+          children: [
+            Icon(Icons.open_in_browser_rounded, color: Color(0xFF0EA5E9), size: 26),
+            SizedBox(width: 10),
+            Text(
+              'Abrir URL en el PC',
+              style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+            ),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Escribe o pega un enlace para abrirlo inmediatamente en el navegador predeterminado de tu ordenador:',
+              style: TextStyle(color: Color(0xFF94A3B8), fontSize: 13),
+            ),
+            const SizedBox(height: 14),
+            TextField(
+              controller: urlController,
+              keyboardType: TextInputType.url,
+              style: const TextStyle(color: Colors.white, fontSize: 14),
+              decoration: InputDecoration(
+                hintText: 'https://ejemplo.com',
+                hintStyle: const TextStyle(color: Colors.white30, fontSize: 14),
+                filled: true,
+                fillColor: const Color(0xFF0F1117),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  borderSide: BorderSide.none,
+                ),
+                suffixIcon: IconButton(
+                  icon: const Icon(Icons.paste_rounded, color: Color(0xFF0EA5E9), size: 20),
+                  tooltip: 'Pegar del portapapeles',
+                  onPressed: () async {
+                    final clip = await Clipboard.getData(Clipboard.kTextPlain);
+                    if (clip?.text != null && clip!.text!.isNotEmpty) {
+                      urlController.text = clip.text!.trim();
+                    }
+                  },
+                ),
+              ),
+            ),
+            const SizedBox(height: 14),
+            const Text(
+              'Accesos directos rápidos:',
+              style: TextStyle(color: Color(0xFF64748B), fontSize: 11, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                _buildUrlShortcutChip('YouTube', 'https://youtube.com', urlController),
+                _buildUrlShortcutChip('GitHub', 'https://github.com', urlController),
+                _buildUrlShortcutChip('Twitch', 'https://twitch.tv', urlController),
+                _buildUrlShortcutChip('Google', 'https://google.com', urlController),
+                _buildUrlShortcutChip('ChatGPT', 'https://chatgpt.com', urlController),
+              ],
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
+          ),
+          ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF0EA5E9),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            icon: const Icon(Icons.launch_rounded, size: 18, color: Colors.white),
+            label: const Text('Abrir en PC', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+            onPressed: () async {
+              final raw = urlController.text.trim();
+              if (raw.isEmpty) return;
+              Navigator.pop(ctx);
+              await _sendCommand('OPEN_URL', {'url': raw});
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildUrlShortcutChip(String label, String url, TextEditingController controller) {
+    return InkWell(
+      onTap: () => controller.text = url,
+      borderRadius: BorderRadius.circular(6),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: const Color(0xFF0F1117),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: const Color(0xFF1E2230)),
+        ),
+        child: Text(
+          label,
+          style: const TextStyle(color: Color(0xFFCBD5E1), fontSize: 11, fontWeight: FontWeight.w600),
+        ),
       ),
     );
   }
@@ -747,7 +860,7 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
                   ),
                   DeckButton(
                     label: 'Desbloquear PC',
-                    subtitle: 'Con contraseña',
+                    subtitle: 'PIN o Contraseña',
                     icon: Icons.lock_open_rounded,
                     accentColor: const Color(0xFF06B6D4), // Cyan
                     onPressed: () {
@@ -760,7 +873,7 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
 
               const SizedBox(height: 24),
 
-              // Sección Pantalla en Vivo y Juegos Autodetectados
+              // Sección Pantalla en Vivo y Aplicaciones
               const Text(
                 'PANTALLA Y BIBLIOTECA',
                 style: TextStyle(
@@ -808,6 +921,32 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
                           ),
                         );
                       }
+                      return Future.value();
+                    },
+                  ),
+                  DeckButton(
+                    label: 'Aplicaciones',
+                    subtitle: 'Programas de Windows',
+                    icon: Icons.apps_rounded,
+                    accentColor: const Color(0xFF6366F1), // Indigo
+                    onPressed: () {
+                      if (_controlClient != null) {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => AppsScreen(controlClient: _controlClient!),
+                          ),
+                        );
+                      }
+                      return Future.value();
+                    },
+                  ),
+                  DeckButton(
+                    label: 'Abrir URL',
+                    subtitle: 'Navegador del PC',
+                    icon: Icons.open_in_browser_rounded,
+                    accentColor: const Color(0xFF0EA5E9), // Sky
+                    onPressed: () {
+                      _showOpenUrlDialog();
                       return Future.value();
                     },
                   ),

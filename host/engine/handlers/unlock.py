@@ -1,25 +1,110 @@
 """
 Manejador de desbloqueo remoto de Windows con validación criptográfica y autenticación local.
-Verifica la contraseña contra la cuenta actual mediante la API nativa LogonUserW de advapi32.
+Soporta tanto contraseña estándar de Windows (mediante advapi32.LogonUserW) como
+PIN de Windows Hello (cifrado en reposo con Windows DPAPI en %APPDATA%\\RemoteControler\\unlock_pin.dat).
 """
 
 import logging
 import os
+import secrets
 import sys
 import time
+from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger("RemoteControler.UnlockHandler")
 
 
 class UnlockAuthenticationError(Exception):
-    """Excepción cuando la contraseña suministrada no es válida para la cuenta de Windows."""
+    """Excepción cuando la contraseña o PIN suministrado no es válido para la cuenta de Windows."""
     pass
 
 
 class UnlockExecutionError(Exception):
     """Excepción cuando ocurre un error al enviar las señales de desbloqueo de entrada."""
     pass
+
+
+def get_pin_file_path() -> Path:
+    """Retorna la ruta al archivo con el PIN de Windows Hello cifrado."""
+    if sys.platform == "win32":
+        base = os.environ.get("APPDATA")
+        if base:
+            p = Path(base) / "RemoteControler"
+        else:
+            p = Path.home() / "AppData" / "Roaming" / "RemoteControler"
+    else:
+        p = Path.home() / ".config" / "RemoteControler"
+
+    p.mkdir(parents=True, exist_ok=True)
+    return p / "unlock_pin.dat"
+
+
+def has_unlock_pin() -> bool:
+    """Comprueba si existe un PIN configurado en disco."""
+    path = get_pin_file_path()
+    return path.exists() and path.stat().st_size > 0
+
+
+def set_unlock_pin(pin: str) -> None:
+    """
+    Cifra y almacena el PIN de Windows Hello usando Windows DPAPI (o simulación en tests).
+    """
+    clean_pin = pin.strip()
+    if not clean_pin:
+        raise ValueError("El PIN no puede estar vacío.")
+
+    path = get_pin_file_path()
+    pin_bytes = clean_pin.encode("utf-8")
+
+    if sys.platform == "win32":
+        from host.core.storage.dpapi import protect_bytes
+        encrypted = protect_bytes(pin_bytes, description="RemoteControler Hello PIN")
+    else:
+        # Fallback para pruebas unitarias fuera de Windows
+        encrypted = b"MOCK_DPAPI:" + pin_bytes
+
+    temp_path = path.with_suffix(".tmp")
+    temp_path.write_bytes(encrypted)
+    temp_path.replace(path)
+    logger.info("PIN de desbloqueo almacenado de forma segura.")
+
+
+def clear_unlock_pin() -> None:
+    """Elimina el PIN almacenado."""
+    path = get_pin_file_path()
+    if path.exists():
+        path.unlink(missing_ok=True)
+        logger.info("PIN de desbloqueo eliminado.")
+
+
+def verify_unlock_pin(pin: str) -> bool:
+    """
+    Comprueba si el PIN ingresado coincide con el PIN cifrado en unlock_pin.dat.
+    """
+    path = get_pin_file_path()
+    if not path.exists():
+        return False
+
+    try:
+        raw_data = path.read_bytes()
+        if not raw_data:
+            return False
+
+        if sys.platform == "win32":
+            from host.core.storage.dpapi import unprotect_bytes
+            decrypted = unprotect_bytes(raw_data)
+        else:
+            if raw_data.startswith(b"MOCK_DPAPI:"):
+                decrypted = raw_data[len(b"MOCK_DPAPI:"):]
+            else:
+                return False
+
+        stored_pin = decrypted.decode("utf-8")
+        return secrets.compare_digest(stored_pin, pin.strip())
+    except Exception as e:
+        logger.warning("Fallo al verificar el PIN de desbloqueo: %s", e)
+        return False
 
 
 def verify_windows_password(password: str, username: Optional[str] = None, domain: Optional[str] = None) -> bool:
@@ -70,13 +155,24 @@ def verify_windows_password(password: str, username: Optional[str] = None, domai
     return False
 
 
-def execute_unlock_pc(password: str, username: Optional[str] = None) -> None:
+def execute_unlock_pc(password_or_pin: str, username: Optional[str] = None) -> None:
     """
-    Autentica la contraseña y, si es correcta, reactiva la pantalla y simula el
-    ingreso de credenciales para desbloquear la sesión de Windows.
+    Autentica la credencial ingresada (PIN de Windows Hello o contraseña de Windows)
+    y, si es correcta, reactiva la pantalla, levanta la cortina con Escape + Espacio
+    y simula el ingreso mediante scan codes de teclado.
     """
-    if not verify_windows_password(password, username):
-        raise UnlockAuthenticationError("La contraseña ingresada no es válida para la cuenta de Windows.")
+    is_valid = False
+
+    # 1. Probar primero si coincide con el PIN configurado
+    if verify_unlock_pin(password_or_pin):
+        is_valid = True
+        logger.info("Autenticación exitosa mediante PIN de Windows Hello.")
+    elif verify_windows_password(password_or_pin, username):
+        is_valid = True
+        logger.info("Autenticación exitosa mediante contraseña de Windows LogonUserW.")
+
+    if not is_valid:
+        raise UnlockAuthenticationError("La contraseña o PIN ingresado no es válido para la cuenta de Windows.")
 
     if sys.platform != "win32":
         logger.info("Entorno no-Windows detectado; validación de desbloqueo completada.")
@@ -94,28 +190,61 @@ def execute_unlock_pc(password: str, username: Optional[str] = None) -> None:
         user32.SendMessageW(HWND_BROADCAST, WM_SYSCOMMAND, SC_MONITORPOWER, -1)
         time.sleep(0.3)
 
-        # 2. Levantar la cortina de la pantalla de bloqueo (Space / Escape)
+        # 2. Levantar la cortina de la pantalla de bloqueo (Escape + Space, esperar 650ms)
+        VK_ESCAPE = 0x1B
         VK_SPACE = 0x20
+        VK_RETURN = 0x0D
         KEYEVENTF_KEYUP = 0x0002
         KEYEVENTF_UNICODE = 0x0004
+        KEYEVENTF_SCANCODE = 0x0008
 
-        user32.keybd_event(VK_SPACE, 0, 0, 0)
-        user32.keybd_event(VK_SPACE, 0, KEYEVENTF_KEYUP, 0)
-        time.sleep(0.4)
+        # Escape
+        sc_esc = user32.MapVirtualKeyW(VK_ESCAPE, 0)
+        user32.keybd_event(VK_ESCAPE, sc_esc, 0, 0)
+        user32.keybd_event(VK_ESCAPE, sc_esc, KEYEVENTF_KEYUP, 0)
+        time.sleep(0.15)
 
-        # 3. Escribir la contraseña carácter por carácter como entrada Unicode
-        for ch in password:
-            code = ord(ch)
-            user32.keybd_event(0, code, KEYEVENTF_UNICODE, 0)
-            user32.keybd_event(0, code, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP, 0)
+        # Space
+        sc_space = user32.MapVirtualKeyW(VK_SPACE, 0)
+        user32.keybd_event(VK_SPACE, sc_space, 0, 0)
+        user32.keybd_event(VK_SPACE, sc_space, KEYEVENTF_KEYUP, 0)
+
+        # Esperar a que la cortina suba completamente (650ms)
+        time.sleep(0.65)
+
+        # 3. Inyectar caracteres de credencial usando scan codes de hardware
+        for ch in password_or_pin:
+            vk_scan = user32.VkKeyScanW(ord(ch))
+            vk = vk_scan & 0xFF
+            shift = (vk_scan >> 8) & 1
+
+            if vk != 0xFF and vk != 0:
+                sc = user32.MapVirtualKeyW(vk, 0)
+                VK_SHIFT = 0x10
+                sc_shift = user32.MapVirtualKeyW(VK_SHIFT, 0)
+
+                if shift:
+                    user32.keybd_event(VK_SHIFT, sc_shift, 0, 0)
+
+                user32.keybd_event(vk, sc, 0, 0)
+                user32.keybd_event(vk, sc, KEYEVENTF_KEYUP, 0)
+
+                if shift:
+                    user32.keybd_event(VK_SHIFT, sc_shift, KEYEVENTF_KEYUP, 0)
+            else:
+                # Fallback Unicode para caracteres exóticos
+                code = ord(ch)
+                user32.keybd_event(0, code, KEYEVENTF_UNICODE, 0)
+                user32.keybd_event(0, code, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP, 0)
+
             time.sleep(0.02)
 
         time.sleep(0.1)
 
-        # 4. Pulsar Enter para confirmar el desbloqueo
-        VK_RETURN = 0x0D
-        user32.keybd_event(VK_RETURN, 0, 0, 0)
-        user32.keybd_event(VK_RETURN, 0, KEYEVENTF_KEYUP, 0)
+        # 4. Pulsar Enter para confirmar
+        sc_return = user32.MapVirtualKeyW(VK_RETURN, 0)
+        user32.keybd_event(VK_RETURN, sc_return, 0, 0)
+        user32.keybd_event(VK_RETURN, sc_return, KEYEVENTF_KEYUP, 0)
 
         logger.info("Secuencia de desbloqueo de Windows enviada exitosamente.")
 

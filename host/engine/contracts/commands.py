@@ -5,6 +5,7 @@ Queda terminantemente prohibido el paso de strings arbitrarios de ejecución.
 """
 
 from enum import Enum
+import urllib.parse
 from typing import Optional, Union, Dict, Any
 from pydantic import BaseModel, Field, model_validator, ConfigDict
 
@@ -18,6 +19,8 @@ class CommandCatalog(str, Enum):
     GAME_LAUNCH = "GAME_LAUNCH"
     SCREEN_FRAME = "SCREEN_FRAME"
     UNLOCK_PC = "UNLOCK_PC"
+    APPS_LIST = "APPS_LIST"
+    OPEN_URL = "OPEN_URL"
 
 
 class MediaAction(str, Enum):
@@ -43,6 +46,7 @@ class PowerAction(str, Enum):
 class AppPlatform(str, Enum):
     """Plataformas seguras de lanzamiento de aplicaciones mediante identificadores internos."""
     STEAM = "STEAM"
+    SYSTEM = "SYSTEM"
 
 
 class GamePlatform(str, Enum):
@@ -88,20 +92,43 @@ class PowerPayload(BaseModel):
 
 class AppLaunchPayload(BaseModel):
     """
-    Payload para lanzamiento de aplicaciones (Compatibilidad retroactiva).
+    Payload para lanzamiento de aplicaciones (Steam o Sistema).
     Mitigación contra RCE y Path Traversal:
-    - Se prohíben absolutamente rutas a ejecutables (ej. 'C:\\...').
-    - Solo se admiten identificadores numéricos verificados de Steam (1 a 2,147,483,647).
+    - En Steam: solo identificadores numéricos verificados (1 a 2,147,483,647).
+    - En Sistema: sólo rutas a accesos directos (.lnk) o ejecutables reconocidos.
     """
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     platform: AppPlatform = Field(default=AppPlatform.STEAM)
-    app_id: int = Field(
-        ...,
-        ge=1,
-        le=2147483647,
-        description="ID numérico de la aplicación en Steam (ej: 730 para CS2). Prohibido texto libre."
+    app_id: Optional[Union[int, str]] = Field(
+        default=None,
+        description="ID numérico de la aplicación en Steam (ej: 730) o identificador alfanumérico."
     )
+    target_path: Optional[str] = Field(
+        default=None,
+        max_length=512,
+        description="Ruta segura del acceso directo descubierto por APPS_LIST."
+    )
+
+    @model_validator(mode="after")
+    def validate_app_payload(self) -> "AppLaunchPayload":
+        if self.platform == AppPlatform.STEAM:
+            if self.app_id is None:
+                raise ValueError("app_id es obligatorio para la plataforma STEAM")
+            if isinstance(self.app_id, str):
+                if not self.app_id.isdigit():
+                    raise ValueError("Steam app_id debe ser un entero numérico")
+                num_id = int(self.app_id)
+            elif isinstance(self.app_id, int):
+                num_id = self.app_id
+            else:
+                raise ValueError("Steam app_id debe ser un entero numérico")
+            if not (1 <= num_id <= 2147483647):
+                raise ValueError("Steam app_id debe estar entre 1 y 2147483647")
+        elif self.platform == AppPlatform.SYSTEM:
+            if not self.target_path and not self.app_id:
+                raise ValueError("target_path o app_id es obligatorio para la plataforma SYSTEM")
+        return self
 
 
 class GamesListPayload(BaseModel):
@@ -145,6 +172,7 @@ class ScreenFramePayload(BaseModel):
 class UnlockPcPayload(BaseModel):
     """
     Payload para desbloqueo remoto autenticado de la sesión de Windows.
+    Acepta tanto contraseña de cuenta Windows como PIN de Windows Hello.
     """
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -152,13 +180,69 @@ class UnlockPcPayload(BaseModel):
         ...,
         min_length=1,
         max_length=256,
-        description="Contraseña de la cuenta de Windows a autenticar mediante LogonUserW."
+        description="Contraseña de la cuenta de Windows o PIN de Windows Hello."
     )
     username: Optional[str] = Field(
         default=None,
         max_length=128,
         description="Nombre de usuario de Windows (por defecto el usuario actual de la sesión)."
     )
+
+
+class AppsListPayload(BaseModel):
+    """
+    Payload para consultar las aplicaciones instaladas en Windows.
+    """
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    query: Optional[str] = Field(
+        default=None,
+        max_length=128,
+        description="Filtro de búsqueda opcional por nombre de aplicación."
+    )
+
+
+class OpenUrlPayload(BaseModel):
+    """
+    Payload para apertura remota de URLs en el navegador predeterminado del PC.
+    Aplica validación estricta de esquema y sintaxis de URL.
+    """
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    url: str = Field(
+        ...,
+        min_length=1,
+        max_length=2048,
+        description="URL a abrir en el navegador predeterminado del PC."
+    )
+
+    @model_validator(mode="after")
+    def validate_url(self) -> "OpenUrlPayload":
+        raw = self.url.strip()
+        if not raw:
+            raise ValueError("La URL no puede estar vacía.")
+
+        # Evitar caracteres de control o inyección de nueva línea
+        if any(c in raw for c in ("\r", "\n", "\0")):
+            raise ValueError("La URL contiene caracteres de control no permitidos.")
+
+        parsed_orig = urllib.parse.urlparse(raw)
+        if parsed_orig.scheme:
+            if parsed_orig.scheme.lower() not in ("http", "https"):
+                raise ValueError(f"Esquema de URL no permitido: '{parsed_orig.scheme}'. Solo se admite http/https.")
+            target_url = raw
+        else:
+            if " " in raw:
+                raise ValueError("La URL contiene espacios no permitidos.")
+            target_url = f"https://{raw}"
+
+        parsed = urllib.parse.urlparse(target_url)
+        if parsed.scheme.lower() not in ("http", "https"):
+            raise ValueError(f"Esquema de URL no permitido: '{parsed.scheme}'. Solo se admite http/https.")
+        if not parsed.netloc or " " in parsed.netloc:
+            raise ValueError("La URL debe incluir un dominio o host válido sin espacios.")
+
+        object.__setattr__(self, "url", target_url)
+        return self
 
 
 CommandPayloadType = Union[
@@ -169,6 +253,8 @@ CommandPayloadType = Union[
     GameLaunchPayload,
     ScreenFramePayload,
     UnlockPcPayload,
+    AppsListPayload,
+    OpenUrlPayload,
 ]
 
 COMMAND_PAYLOAD_SCHEMA_MAP: Dict[CommandCatalog, type[BaseModel]] = {
@@ -179,6 +265,8 @@ COMMAND_PAYLOAD_SCHEMA_MAP: Dict[CommandCatalog, type[BaseModel]] = {
     CommandCatalog.GAME_LAUNCH: GameLaunchPayload,
     CommandCatalog.SCREEN_FRAME: ScreenFramePayload,
     CommandCatalog.UNLOCK_PC: UnlockPcPayload,
+    CommandCatalog.APPS_LIST: AppsListPayload,
+    CommandCatalog.OPEN_URL: OpenUrlPayload,
 }
 
 

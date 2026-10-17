@@ -42,16 +42,15 @@ class RemoteControlClient {
   WebSocketChannel? _channel;
   StreamSubscription? _subscription;
   Timer? _heartbeatTimer;
+  Timer? _reconnectTimer;
 
   DeckConnectionState _state = DeckConnectionState.disconnected;
   final StreamController<DeckConnectionState> _stateController =
       StreamController<DeckConnectionState>.broadcast();
 
-  final Completer<Map<String, dynamic>>? _pendingResponseCompleter = null;
   Completer<Map<String, dynamic>>? _activeCommandCompleter;
 
   int _reconnectAttempts = 0;
-  final Random _random = Random();
   bool _isDisposed = false;
 
   RemoteControlClient({
@@ -64,6 +63,7 @@ class RemoteControlClient {
 
   Stream<DeckConnectionState> get stateStream => _stateController.stream;
   DeckConnectionState get state => _state;
+  bool get isConnected => _state == DeckConnectionState.connected;
 
   /// Valida que el hostEndpoint apunte exclusivamente a la red Tailscale o localhost en modo dev.
   void _validateEndpoint(String endpoint) {
@@ -106,6 +106,8 @@ class RemoteControlClient {
 
       _setState(DeckConnectionState.connected);
       _reconnectAttempts = 0;
+      _reconnectTimer?.cancel();
+      _reconnectTimer = null;
 
       _subscription = _channel!.stream.listen(
         _onMessageReceived,
@@ -118,6 +120,17 @@ class RemoteControlClient {
     } catch (e) {
       _scheduleReconnect();
     }
+  }
+
+  /// Reconecta de inmediato si la sesión no está conectada o se perdió por cambio de ciclo de vida.
+  Future<void> ensureConnected() async {
+    if (_isDisposed) return;
+    if (_state == DeckConnectionState.connected || _state == DeckConnectionState.connecting) {
+      return;
+    }
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+    await connect();
   }
 
   void _onMessageReceived(dynamic data) {
@@ -162,10 +175,11 @@ class RemoteControlClient {
     _setState(DeckConnectionState.reconnecting);
 
     _reconnectAttempts++;
-    // Backoff exponencial con jitter: min(30s, 1s * 1.5^intentos + jitter)
-    final delaySeconds = min(30.0, pow(1.5, _reconnectAttempts) + _random.nextDouble());
+    // Backoff resiliente: 1s, 2s, 3s, máx 5s
+    final delaySeconds = min(5, max(1, _reconnectAttempts));
 
-    Timer(Duration(milliseconds: (delaySeconds * 1000).toInt()), () {
+    _reconnectTimer?.cancel();
+    _reconnectTimer = Timer(Duration(seconds: delaySeconds), () {
       if (!_isDisposed && _state == DeckConnectionState.reconnecting) {
         connect();
       }
@@ -174,9 +188,9 @@ class RemoteControlClient {
 
   void _startHeartbeat() {
     _heartbeatTimer?.cancel();
-    _heartbeatTimer = Timer.periodic(const Duration(seconds: 25), (_) {
+    _heartbeatTimer = Timer.periodic(const Duration(seconds: 10), (_) {
       if (_state == DeckConnectionState.connected && _channel != null) {
-        // Ping pasivo o sondeo
+        // Enviar ping pasivo o keep-alive
       }
     });
   }
@@ -226,6 +240,8 @@ class RemoteControlClient {
   /// Cierra de forma ordenada los sockets y cancela temporizadores.
   Future<void> dispose() async {
     _isDisposed = true;
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
     _cleanupConnection();
     _setState(DeckConnectionState.disconnected);
     await _stateController.close();

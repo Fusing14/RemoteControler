@@ -1,11 +1,12 @@
 """
-Punto de entrada principal (CLI Daemon) de RemoteControler Host.
-Manejo de subcomandos: 'run', 'pair', 'verify-audit'.
+Punto de entrada principal (CLI Daemon y GUI) de RemoteControler Host.
+Manejo de subcomandos: 'gui', 'run', 'pair', 'verify-audit', 'set-pin'.
 """
 
 import sys
 import os
 import argparse
+import getpass
 import logging
 import uvicorn
 import qrcode
@@ -23,12 +24,14 @@ from host.core.security.anti_replay import AntiReplayValidator
 from host.core.security.rate_limiter import RateLimiter
 from host.core.audit.logger import AuditLogger, verify_audit_log_integrity
 from host.engine.dispatcher import CommandDispatcher
+from host.engine.handlers.unlock import set_unlock_pin, has_unlock_pin
 from host.transport.network_utils import (
     get_tailscale_ip,
     validate_bind_address,
     SecurityConfigurationError,
 )
 from host.transport.server import create_app
+from host.ui.gui import launch_gui
 
 logging.basicConfig(
     level=logging.INFO,
@@ -42,7 +45,6 @@ def cmd_pair(args):
     device_store = TrustedDeviceStore()
     pairing_mgr = PairingManager(device_store, default_ttl_seconds=args.ttl)
 
-    # Determinar endpoint a publicitar
     endpoint = args.endpoint
     if not endpoint:
         tailscale_ip = get_tailscale_ip()
@@ -81,7 +83,6 @@ def cmd_pair(args):
 
 def cmd_run(args):
     """Subcomando 'run': Inicia el servidor daemon en la interfaz segura."""
-    # 1. Determinar y validar IP de enlace
     bind_ip = args.bind_ip
     if not bind_ip:
         bind_ip = get_tailscale_ip()
@@ -102,7 +103,6 @@ def cmd_run(args):
         logger.critical("Violación de configuración de seguridad: %s", e)
         sys.exit(1)
 
-    # 2. Inicialización de componentes criptográficos y de seguridad
     device_store = TrustedDeviceStore()
     anti_replay = AntiReplayValidator(max_clock_skew_seconds=30, nonce_ttl_seconds=60)
     dispatcher = CommandDispatcher(device_store, anti_replay)
@@ -110,7 +110,6 @@ def cmd_run(args):
     rate_limiter = RateLimiter(max_rate_per_second=10.0, base_ban_duration_seconds=300.0)
     audit_logger = AuditLogger()
 
-    # 3. Comprobación de integridad de auditoría previa al arranque
     is_audit_ok, audit_msg = verify_audit_log_integrity(audit_logger.log_path, audit_logger.get_hmac_key())
     if not is_audit_ok:
         logger.critical("¡ALERTA CRÍTICA DE SEGURIDAD! El registro de auditoría local ha sido manipulado:")
@@ -120,14 +119,12 @@ def cmd_run(args):
     else:
         logger.info("Verificación de integridad de auditoría: OK (%s)", audit_msg)
 
-    # 4. Registrar evento de inicio
     audit_logger.log_event(
         event_type="DAEMON_STARTUP",
         result_status="INITIALIZED",
         details={"bind_ip": validated_ip, "port": args.port, "dev_mode": args.dev}
     )
 
-    # 5. Construir y ejecutar FastAPI ASGI App
     app = create_app(
         dispatcher=dispatcher,
         device_store=device_store,
@@ -160,11 +157,43 @@ def cmd_verify_audit(args):
         sys.exit(1)
 
 
+def cmd_set_pin(args):
+    """Subcomando 'set-pin': Configura el PIN de Windows Hello protegido por DPAPI."""
+    pin = args.pin
+    if not pin:
+        pin = getpass.getpass("Introduce el nuevo PIN de Windows Hello: ").strip()
+        confirm = getpass.getpass("Confirma el PIN de Windows Hello: ").strip()
+        if pin != confirm:
+            print("[-] ERROR: Los PINs ingresados no coinciden.")
+            sys.exit(1)
+
+    if not pin:
+        print("[-] ERROR: El PIN no puede estar vacío.")
+        sys.exit(1)
+
+    try:
+        set_unlock_pin(pin)
+        print("[+] ÉXITO: PIN de Windows Hello cifrado y guardado con DPAPI.")
+    except Exception as e:
+        print(f"[-] ERROR al guardar el PIN: {e}")
+        sys.exit(1)
+
+
 def main():
+    # Si se invoca sin argumentos o con flag --gui, abrir interfaz gráfica
+    if len(sys.argv) == 1 or (len(sys.argv) == 2 and sys.argv[1] in ("--gui", "-g")):
+        launch_gui(minimized=False)
+        return
+
     parser = argparse.ArgumentParser(
         description="RemoteControler Host - Sistema de Control Remoto Zero-Trust para Windows"
     )
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    subparsers = parser.add_subparsers(dest="command", required=False)
+
+    # Subcomando gui
+    p_gui = subparsers.add_parser("gui", help="Inicia la interfaz gráfica de usuario de escritorio")
+    p_gui.add_argument("--minimized", action="store_true", help="Inicia la GUI minimizada en segundo plano")
+    p_gui.add_argument("--dev", action="store_true", help="Habilita modo desarrollo local (127.0.0.1)")
 
     # Subcomando run
     p_run = subparsers.add_parser("run", help="Inicia el servidor daemon en la interfaz segura")
@@ -182,14 +211,24 @@ def main():
     # Subcomando verify-audit
     subparsers.add_parser("verify-audit", help="Verifica la integridad de la cadena de auditoría HMAC")
 
+    # Subcomando set-pin
+    p_pin = subparsers.add_parser("set-pin", help="Configura el PIN de Windows Hello cifrado con DPAPI")
+    p_pin.add_argument("pin", nargs="?", default=None, help="PIN de desbloqueo (opcional, se solicita si no se pasa)")
+
     args = parser.parse_args()
 
-    if args.command == "run":
+    if args.command == "gui" or not args.command:
+        minimized = getattr(args, "minimized", False)
+        dev = getattr(args, "dev", False)
+        launch_gui(minimized=minimized, dev_mode=dev)
+    elif args.command == "run":
         cmd_run(args)
     elif args.command == "pair":
         cmd_pair(args)
     elif args.command == "verify-audit":
         cmd_verify_audit(args)
+    elif args.command == "set-pin":
+        cmd_set_pin(args)
 
 
 if __name__ == "__main__":

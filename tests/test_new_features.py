@@ -2,8 +2,11 @@
 Pruebas unitarias para las nuevas funcionalidades del Host:
 1. Escáner de juegos (Steam ACF y Epic Games Manifests).
 2. Captura de pantalla en memoria (Live Screen).
-3. Desbloqueo remoto con contraseña (LogonUserW).
-4. Despacho seguro de los nuevos comandos en CommandDispatcher.
+3. Desbloqueo remoto con contraseña y PIN de Windows Hello (DPAPI).
+4. Configuración persistente de Host y auto-arranque.
+5. Escáner y lanzador de aplicaciones del sistema Windows.
+6. Validación y apertura remota de URLs en el navegador.
+7. Despacho seguro de comandos en CommandDispatcher.
 """
 
 import base64
@@ -11,29 +14,46 @@ import json
 import secrets
 import time
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 import pytest
+from pydantic import ValidationError
 
 from host.core.discovery.game_scanner import (
     scan_steam_games,
     scan_epic_games,
     scan_installed_games,
 )
+from host.core.discovery.app_scanner import (
+    scan_installed_apps,
+    launch_system_app,
+    is_app_excluded,
+)
+from host.core.storage.host_config import HostConfig
 from host.engine.contracts.commands import (
     CommandCatalog,
     GamePlatform,
+    AppPlatform,
     GamesListPayload,
     GameLaunchPayload,
     ScreenFramePayload,
     UnlockPcPayload,
+    AppsListPayload,
+    OpenUrlPayload,
+    AppLaunchPayload,
 )
 from host.engine.contracts.envelope import SignedEnvelope
 from host.engine.dispatcher import CommandDispatcher, ExecutionStatus
 from host.engine.handlers.screen import capture_screen_jpeg
+from host.engine.handlers.apps import execute_open_url, execute_app_command
 from host.engine.handlers.unlock import (
     verify_windows_password,
     execute_unlock_pc,
+    set_unlock_pin,
+    verify_unlock_pin,
+    has_unlock_pin,
+    clear_unlock_pin,
+    get_pin_file_path,
     UnlockAuthenticationError,
 )
 from host.core.storage.device_store import TrustedDeviceStore
@@ -103,21 +123,18 @@ def test_steam_acf_parsing(tmp_path):
     steamapps = tmp_path / "steamapps"
     steamapps.mkdir()
 
-    # Juego normal
     game_acf = steamapps / "appmanifest_730.acf"
     game_acf.write_text(
         '"AppState"\n{\n\t"appid"\t\t"730"\n\t"name"\t\t"Counter-Strike 2"\n}\n',
         encoding="utf-8"
     )
 
-    # Herramienta excluida
     tool_acf = steamapps / "appmanifest_228980.acf"
     tool_acf.write_text(
         '"AppState"\n{\n\t"appid"\t\t"228980"\n\t"name"\t\t"Steamworks Common Redistributables"\n}\n',
         encoding="utf-8"
     )
 
-    # libraryfolders.vdf
     vdf = steamapps / "libraryfolders.vdf"
     vdf.write_text(f'"libraryfolders"\n{{\n\t"0"\n\t{{\n\t\t"path"\t\t"{str(tmp_path)}"\n\t}}\n}}\n', encoding="utf-8")
 
@@ -130,7 +147,6 @@ def test_steam_acf_parsing(tmp_path):
 
 
 def test_epic_games_item_parsing(tmp_path):
-    # Juego principal
     main_game = tmp_path / "GTA5.item"
     main_game.write_text(json.dumps({
         "DisplayName": "Grand Theft Auto V",
@@ -140,7 +156,6 @@ def test_epic_games_item_parsing(tmp_path):
         "MainGameAppName": "GTA5"
     }), encoding="utf-8")
 
-    # DLC o complemento secundario (debe filtrarse)
     dlc_item = tmp_path / "GTA5_DLC.item"
     dlc_item.write_text(json.dumps({
         "DisplayName": "GTA5 Criminal Enterprise Starter Pack",
@@ -170,31 +185,166 @@ def test_screen_capture_jpeg():
     assert res["width"] <= 640
     assert res["height"] <= 360
 
-    # Decodificar JPEG y verificar magic header
     frame_bytes = base64.b64decode(res["frame"])
     assert len(frame_bytes) > 100
     assert frame_bytes.startswith(b"\xff\xd8")  # JPEG Start of Image
 
 
 # ==========================================
-# 3. Tests de Desbloqueo de Windows
+# 3. Tests de Desbloqueo de Windows y PIN DPAPI
 # ==========================================
 
 def test_unlock_pc_logic(monkeypatch):
-    # Mock verify_windows_password
     monkeypatch.setattr("host.engine.handlers.unlock.verify_windows_password", lambda pwd, user=None: pwd == "secret123")
+    monkeypatch.setattr("host.engine.handlers.unlock.verify_unlock_pin", lambda pwd: False)
 
-    # Contraseña correcta
     with patch("time.sleep"):
         execute_unlock_pc("secret123")
 
-    # Contraseña incorrecta
     with pytest.raises(UnlockAuthenticationError):
         execute_unlock_pc("wrong_password")
 
 
+def test_unlock_pin_dpapi_lifecycle(tmp_path, monkeypatch):
+    test_pin_path = tmp_path / "unlock_pin.dat"
+    monkeypatch.setattr("host.engine.handlers.unlock.get_pin_file_path", lambda: test_pin_path)
+
+    assert not has_unlock_pin()
+
+    # Configurar PIN
+    set_unlock_pin("987654")
+    assert has_unlock_pin()
+    assert verify_unlock_pin("987654")
+    assert not verify_unlock_pin("000000")
+
+    # Ejecutar desbloqueo con PIN correcto
+    with patch("time.sleep"):
+        execute_unlock_pc("987654")
+
+    # Eliminar PIN
+    clear_unlock_pin()
+    assert not has_unlock_pin()
+    assert not verify_unlock_pin("987654")
+
+
 # ==========================================
-# 4. Tests de Despacho de Nuevos Comandos
+# 4. Tests de Configuración Persistente (HostConfig)
+# ==========================================
+
+def test_host_config_defaults_and_mutation(tmp_path):
+    config_file = tmp_path / "host_config.json"
+    cfg = HostConfig(config_file=config_file)
+
+    assert cfg.keep_session_open is True
+    assert cfg.get("port") == 8443
+
+    # Modificar y persistir
+    cfg.keep_session_open = False
+    cfg.set("port", 9000)
+
+    # Recargar desde disco
+    cfg2 = HostConfig(config_file=config_file)
+    assert cfg2.keep_session_open is False
+    assert cfg2.get("port") == 9000
+
+
+# ==========================================
+# 5. Tests del Escáner y Lanzador de Aplicaciones
+# ==========================================
+
+def test_app_scanner_filtering(tmp_path):
+    # Crear accesos directos simulados
+    calc = tmp_path / "Calculadora.lnk"
+    calc.write_bytes(b"lnk_data")
+
+    notepad = tmp_path / "Notepad.lnk"
+    notepad.write_bytes(b"lnk_data")
+
+    uninstaller = tmp_path / "Uninstall App.lnk"
+    uninstaller.write_bytes(b"lnk_data")
+
+    readme = tmp_path / "README.lnk"
+    readme.write_bytes(b"lnk_data")
+
+    apps = scan_installed_apps(custom_dirs=[tmp_path])
+    app_names = [a["name"] for a in apps]
+
+    assert "Calculadora" in app_names
+    assert "Notepad" in app_names
+    assert "Uninstall App" not in app_names
+    assert "README" not in app_names
+
+
+def test_is_app_excluded():
+    assert is_app_excluded("Desinstalar Programa")
+    assert is_app_excluded("App Uninstall")
+    assert is_app_excluded("Guía de Ayuda")
+    assert is_app_excluded("License Agreement")
+    assert not is_app_excluded("Spotify")
+    assert not is_app_excluded("Discord")
+
+
+def test_launch_system_app_validation(tmp_path):
+    valid_file = tmp_path / "test_app.lnk"
+    valid_file.write_bytes(b"dummy")
+
+    with patch("os.startfile", create=True) as mock_startfile:
+        res = launch_system_app(target_path=str(valid_file))
+        assert res is True
+
+    # Archivo inexistente
+    with pytest.raises(FileNotFoundError):
+        launch_system_app(target_path=str(tmp_path / "non_existent.lnk"))
+
+    # Extensión no permitida
+    bad_ext = tmp_path / "script.bat"
+    bad_ext.write_bytes(b"dummy")
+    with pytest.raises(ValueError):
+        launch_system_app(target_path=str(bad_ext))
+
+
+# ==========================================
+# 6. Tests de Validación y Apertura de URLs
+# ==========================================
+
+def test_open_url_payload_normalization():
+    p1 = OpenUrlPayload.model_validate({"url": "https://github.com"})
+    assert p1.url == "https://github.com"
+
+    # Prepend automático de https://
+    p2 = OpenUrlPayload.model_validate({"url": "youtube.com/watch?v=123"})
+    assert p2.url == "https://youtube.com/watch?v=123"
+
+    p3 = OpenUrlPayload.model_validate({"url": "http://localhost:8080"})
+    assert p3.url == "http://localhost:8080"
+
+
+def test_open_url_payload_rejections():
+    # Esquemas peligrosos prohibidos
+    with pytest.raises(ValidationError):
+        OpenUrlPayload.model_validate({"url": "file:///C:/Windows/cmd.exe"})
+
+    with pytest.raises(ValidationError):
+        OpenUrlPayload.model_validate({"url": "javascript:alert(1)"})
+
+    # Inyección de nueva línea
+    with pytest.raises(ValidationError):
+        OpenUrlPayload.model_validate({"url": "https://example.com\r\nInjected"})
+
+    # URL vacía
+    with pytest.raises(ValidationError):
+        OpenUrlPayload.model_validate({"url": "   "})
+
+
+def test_execute_open_url():
+    with patch("webbrowser.open") as mock_open:
+        res = execute_open_url("github.com")
+        assert res == "https://github.com"
+        mock_open.assert_called_once_with("https://github.com", new=2)
+
+
+# ==========================================
+# 7. Tests de Despacho de Nuevos Comandos
 # ==========================================
 
 def test_dispatcher_games_list(test_setup):
@@ -232,6 +382,7 @@ def test_dispatcher_screen_frame(test_setup):
 def test_dispatcher_unlock_pc_success(test_setup, monkeypatch):
     dispatcher = test_setup["dispatcher"]
     monkeypatch.setattr("host.engine.handlers.unlock.verify_windows_password", lambda pwd, user=None: True)
+    monkeypatch.setattr("host.engine.handlers.unlock.verify_unlock_pin", lambda pwd: False)
 
     envelope = create_envelope(
         setup=test_setup,
@@ -250,6 +401,7 @@ def test_dispatcher_unlock_pc_success(test_setup, monkeypatch):
 def test_dispatcher_unlock_pc_invalid_password(test_setup, monkeypatch):
     dispatcher = test_setup["dispatcher"]
     monkeypatch.setattr("host.engine.handlers.unlock.verify_windows_password", lambda pwd, user=None: False)
+    monkeypatch.setattr("host.engine.handlers.unlock.verify_unlock_pin", lambda pwd: False)
 
     envelope = create_envelope(
         setup=test_setup,
@@ -261,3 +413,41 @@ def test_dispatcher_unlock_pc_invalid_password(test_setup, monkeypatch):
     assert result.status == ExecutionStatus.ERROR
     assert result.error_code == "INVALID_PASSWORD"
     assert "incorrecta" in result.message
+
+
+def test_dispatcher_apps_list(test_setup, monkeypatch):
+    dispatcher = test_setup["dispatcher"]
+    monkeypatch.setattr(
+        "host.engine.dispatcher.scan_installed_apps",
+        lambda: [{"app_id": "app1", "name": "Calculator", "target_path": "C:\\calc.lnk"}]
+    )
+
+    envelope = create_envelope(
+        setup=test_setup,
+        command_id=CommandCatalog.APPS_LIST,
+        payload={}
+    )
+
+    result = dispatcher.dispatch(envelope)
+    assert result.status == ExecutionStatus.SUCCESS
+    assert result.command_id == "APPS_LIST"
+    assert "apps" in result.data
+    assert len(result.data["apps"]) == 1
+    assert result.data["apps"][0]["name"] == "Calculator"
+
+
+def test_dispatcher_open_url(test_setup, monkeypatch):
+    dispatcher = test_setup["dispatcher"]
+    monkeypatch.setattr("webbrowser.open", lambda url, new=2: True)
+
+    envelope = create_envelope(
+        setup=test_setup,
+        command_id=CommandCatalog.OPEN_URL,
+        payload={"url": "https://google.com"}
+    )
+
+    result = dispatcher.dispatch(envelope)
+    assert result.status == ExecutionStatus.SUCCESS
+    assert result.command_id == "OPEN_URL"
+    assert "url" in result.data
+    assert result.data["url"] == "https://google.com"
