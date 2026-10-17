@@ -3,19 +3,19 @@
 library;
 
 import 'dart:convert';
-import 'package:uuid/uuid.dart';
+import 'dart:math';
 
 import '../crypto/key_manager.dart';
 
 class EnvelopeBuilder {
   final KeyManager _keyManager;
-  final Uuid _uuid;
+  final Random _secureRandom;
 
   EnvelopeBuilder({
     required KeyManager keyManager,
-    Uuid? uuid,
+    Random? secureRandom,
   })  : _keyManager = keyManager,
-        _uuid = uuid ?? const Uuid();
+        _secureRandom = secureRandom ?? Random.secure();
 
   /// Construye y firma un SignedEnvelope listo para transmitirse por WebSocket.
   /// 
@@ -29,8 +29,8 @@ class EnvelopeBuilder {
     String? customNonce,
   }) async {
     final timestampUtc = customTimestamp ?? (DateTime.now().toUtc().millisecondsSinceEpoch ~/ 1000);
-    // Nonce de 32 caracteres hexadecimales (16 bytes de entropía segura)
-    final nonce = customNonce ?? _uuid.v4().replaceAll('-', '').toLowerCase();
+    // Nonce de 32 caracteres hexadecimales (16 bytes de entropía segura CSPRNG)
+    final nonce = customNonce ?? _generateSecureNonce();
     final deviceId = _keyManager.deviceId;
 
     // Diccionario canónico que será firmado
@@ -53,6 +53,12 @@ class EnvelopeBuilder {
       'signature': signature,
       'timestamp_utc': timestampUtc,
     };
+  }
+
+  /// Generador de nonces de 16 bytes (32 hex chars) utilizando CSPRNG nativo del OS (dart:math Random.secure).
+  String _generateSecureNonce() {
+    final values = List<int>.generate(16, (i) => _secureRandom.nextInt(256));
+    return values.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
   }
 
   /// Construye el SignedEnvelope y lo serializa a string JSON.
