@@ -371,15 +371,25 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
                       }
                     });
                     break;
-                  case OtaStatus.PERMISSION_NOT_GRANTED_OR_UNEXPECTED_ERROR:
+                  case OtaStatus.PERMISSION_NOT_GRANTED_ERROR:
                     setModalState(() {
                       hasError = true;
                       statusText = 'Permiso denegado para instalar APKs. Habilítalo en Ajustes.';
                     });
                     break;
-                  case OtaStatus.ALREADY_RUNNING_OR_ERROR:
+                  case OtaStatus.ALREADY_RUNNING_ERROR:
+                    setModalState(() {
+                      hasError = true;
+                      statusText = 'Ya hay una actualización en curso.';
+                    });
+                    break;
                   case OtaStatus.INTERNAL_ERROR:
-                  case OtaStatus.CHECKSUM_ERROR:
+                    setModalState(() {
+                      hasError = true;
+                      statusText = 'Error interno en la actualización (${event.status.name})';
+                    });
+                    break;
+                  default:
                     setModalState(() {
                       hasError = true;
                       statusText = 'Error en la actualización (${event.status.name})';
