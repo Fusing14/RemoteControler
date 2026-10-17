@@ -343,7 +343,7 @@ class HostDashboardApp:
 
         devices = self.device_store.list_devices()
         for dev in devices:
-            ts = dev.get("registered_at_utc", 0)
+            ts = dev.get("registered_at_utc") or dev.get("registered_at", 0)
             time_str = time.strftime("%Y-%m-%d %H:%M", time.localtime(ts)) if ts else "Desconocida"
             self.device_tree.insert(
                 "",

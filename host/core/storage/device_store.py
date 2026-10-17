@@ -211,6 +211,17 @@ class TrustedDeviceStore:
                 "device_id": entry["device_id"],
                 "label": entry["label"],
                 "registered_at": entry["registered_at"],
+                "registered_at_utc": entry.get("registered_at"),
             }
             for entry in self._trusted_devices.values()
         ]
+
+    def list_devices(self) -> List[dict]:
+        """
+        Retorna la lista de dispositivos registrados.
+        Alias para compatibilidad con la interfaz gráfica y consumidores externos.
+        """
+        if hasattr(self, "list_trusted_devices"):
+            return self.list_trusted_devices()
+        return list(self._trusted_devices.values()) if hasattr(self, "_trusted_devices") else []
+

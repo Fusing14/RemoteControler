@@ -87,6 +87,10 @@ def test_device_store_registration_and_revocation(tmp_path: Path):
     assert len(devices_list) == 1
     assert devices_list[0]["device_id"] == device_id
     assert devices_list[0]["label"] == "Pixel 9 Pro de Marco"
+    assert devices_list[0]["registered_at_utc"] == devices_list[0]["registered_at"]
+
+    # Comprobar alias list_devices()
+    assert store.list_devices() == devices_list
 
     # 2. Revocar dispositivo
     revoked = store.revoke_device(device_id)
