@@ -18,11 +18,27 @@ tasks.register("clean", Delete) {
 }
 
 subprojects { project ->
-    def configureNamespace = {
+    def configurePlugin = {
         if (project.hasProperty("android")) {
+            def manifestFile = project.file("src/main/AndroidManifest.xml")
+            def packageName = null
+
+            if (manifestFile.exists()) {
+                def manifestContent = manifestFile.getText('UTF-8')
+                def matcher = (manifestContent =~ /package="([^"]+)"/)
+                if (matcher.find()) {
+                    packageName = matcher.group(1)
+                    // Eliminar el atributo package="..." del AndroidManifest del plugin en .pub-cache para cumplir con AGP 8
+                    def updatedContent = manifestContent.replaceFirst(/package="[^"]+"/, "")
+                    manifestFile.write(updatedContent, 'UTF-8')
+                }
+            }
+
             if (project.android.namespace == null) {
-                if (project.name == "ota_update") {
-                    project.android.namespace = "eu.wroblewscy.marcin.ota_update"
+                if (packageName != null) {
+                    project.android.namespace = packageName
+                } else if (project.name == "ota_update") {
+                    project.android.namespace = "sk.fourq.otaupdate"
                 } else {
                     project.android.namespace = project.group ?: "com.example.${project.name}"
                 }
@@ -31,10 +47,10 @@ subprojects { project ->
     }
 
     if (project.state.executed) {
-        configureNamespace()
+        configurePlugin()
     } else {
         project.afterEvaluate {
-            configureNamespace()
+            configurePlugin()
         }
     }
 }
