@@ -9,6 +9,7 @@ import '../../crypto/key_manager.dart';
 import '../widgets/deck_button.dart';
 import 'scanner_screen.dart';
 import 'screen_viewer_screen.dart';
+import 'camera_viewer_screen.dart';
 import 'games_screen.dart';
 import 'apps_screen.dart';
 import '../../services/updater_service.dart';
@@ -948,6 +949,22 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
                         Navigator.of(context).push(
                           MaterialPageRoute(
                             builder: (_) => ScreenViewerScreen(controlClient: _controlClient!),
+                          ),
+                        );
+                      }
+                      return Future.value();
+                    },
+                  ),
+                  DeckButton(
+                    label: 'Ver Cámara',
+                    subtitle: 'Webcam en vivo',
+                    icon: Icons.videocam_rounded,
+                    accentColor: const Color(0xFF14B8A6), // Teal
+                    onPressed: () {
+                      if (_controlClient != null) {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => CameraViewerScreen(controlClient: _controlClient!),
                           ),
                         );
                       }

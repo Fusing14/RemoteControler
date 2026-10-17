@@ -18,6 +18,7 @@ from host.engine.contracts.commands import (
     GamesListPayload,
     GameLaunchPayload,
     ScreenFramePayload,
+    CameraFramePayload,
     UnlockPcPayload,
     AppsListPayload,
     OpenUrlPayload,
@@ -49,6 +50,7 @@ from host.engine.handlers.apps import (
     AppLaunchError,
 )
 from host.engine.handlers.screen import capture_screen_jpeg, ScreenCaptureError
+from host.engine.handlers.camera import capture_camera_jpeg, CameraCaptureError
 from host.engine.handlers.unlock import (
     execute_unlock_pc,
     UnlockAuthenticationError,
@@ -165,11 +167,18 @@ class CommandDispatcher:
                     max_height=parsed_payload.max_height,
                     quality=parsed_payload.quality
                 )
+            elif envelope.command_id == CommandCatalog.CAMERA_FRAME:
+                assert isinstance(parsed_payload, CameraFramePayload)
+                extra_data = capture_camera_jpeg(
+                    camera_index=parsed_payload.camera_index,
+                    max_width=parsed_payload.max_width,
+                    max_height=parsed_payload.max_height,
+                    quality=parsed_payload.quality
+                )
             elif envelope.command_id == CommandCatalog.UNLOCK_PC:
                 assert isinstance(parsed_payload, UnlockPcPayload)
                 execute_unlock_pc(parsed_payload.password, parsed_payload.username)
             elif envelope.command_id == CommandCatalog.APPS_LIST:
-                assert isinstance(parsed_payload, AppsListPayload)
                 apps = scan_installed_apps()
                 if parsed_payload.query:
                     q = parsed_payload.query.lower().strip()
@@ -206,7 +215,7 @@ class CommandDispatcher:
                 message="Contraseña o PIN de Windows incorrecta.",
                 error_code="INVALID_PASSWORD"
             )
-        except (MediaExecutionError, PowerExecutionError, AppLaunchError, ScreenCaptureError, UnlockExecutionError) as e:
+        except (MediaExecutionError, PowerExecutionError, AppLaunchError, ScreenCaptureError, CameraCaptureError, UnlockExecutionError) as e:
             logger.error("Error durante la ejecución del handler Win32: %s", e)
             return ExecutionResult(
                 status=ExecutionStatus.ERROR,

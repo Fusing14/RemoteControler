@@ -21,6 +21,7 @@ class CommandCatalog(str, Enum):
     UNLOCK_PC = "UNLOCK_PC"
     APPS_LIST = "APPS_LIST"
     OPEN_URL = "OPEN_URL"
+    CAMERA_FRAME = "CAMERA_FRAME"
 
 
 class MediaAction(str, Enum):
@@ -169,6 +170,18 @@ class ScreenFramePayload(BaseModel):
     quality: int = Field(default=70, ge=30, le=95)
 
 
+class CameraFramePayload(BaseModel):
+    """
+    Payload para solicitud de fotograma de cámara web en vivo.
+    """
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    camera_index: int = Field(default=0, ge=0, le=10, description="Índice del dispositivo de cámara (0 para predeterminada).")
+    max_width: int = Field(default=854, ge=320, le=1920)
+    max_height: int = Field(default=480, ge=240, le=1080)
+    quality: int = Field(default=65, ge=30, le=95)
+
+
 class UnlockPcPayload(BaseModel):
     """
     Payload para desbloqueo remoto autenticado de la sesión de Windows.
@@ -252,6 +265,7 @@ CommandPayloadType = Union[
     GamesListPayload,
     GameLaunchPayload,
     ScreenFramePayload,
+    CameraFramePayload,
     UnlockPcPayload,
     AppsListPayload,
     OpenUrlPayload,
@@ -264,6 +278,7 @@ COMMAND_PAYLOAD_SCHEMA_MAP: Dict[CommandCatalog, type[BaseModel]] = {
     CommandCatalog.GAMES_LIST: GamesListPayload,
     CommandCatalog.GAME_LAUNCH: GameLaunchPayload,
     CommandCatalog.SCREEN_FRAME: ScreenFramePayload,
+    CommandCatalog.CAMERA_FRAME: CameraFramePayload,
     CommandCatalog.UNLOCK_PC: UnlockPcPayload,
     CommandCatalog.APPS_LIST: AppsListPayload,
     CommandCatalog.OPEN_URL: OpenUrlPayload,

@@ -37,6 +37,7 @@ from host.engine.contracts.commands import (
     GamesListPayload,
     GameLaunchPayload,
     ScreenFramePayload,
+    CameraFramePayload,
     UnlockPcPayload,
     AppsListPayload,
     OpenUrlPayload,
@@ -45,6 +46,7 @@ from host.engine.contracts.commands import (
 from host.engine.contracts.envelope import SignedEnvelope
 from host.engine.dispatcher import CommandDispatcher, ExecutionStatus
 from host.engine.handlers.screen import capture_screen_jpeg
+from host.engine.handlers.camera import capture_camera_jpeg, release_camera, CameraManager
 from host.engine.handlers.apps import execute_open_url, execute_app_command
 from host.engine.handlers.unlock import (
     verify_windows_password,
@@ -451,3 +453,58 @@ def test_dispatcher_open_url(test_setup, monkeypatch):
     assert result.command_id == "OPEN_URL"
     assert "url" in result.data
     assert result.data["url"] == "https://google.com"
+
+
+def test_camera_frame_payload_validation():
+    payload = CameraFramePayload()
+    assert payload.camera_index == 0
+    assert payload.max_width == 854
+    assert payload.max_height == 480
+    assert payload.quality == 65
+
+    custom = CameraFramePayload(camera_index=1, max_width=640, max_height=360, quality=50)
+    assert custom.camera_index == 1
+    assert custom.max_width == 640
+    assert custom.max_height == 360
+    assert custom.quality == 50
+
+
+def test_camera_frame_payload_invalid():
+    with pytest.raises(ValidationError):
+        CameraFramePayload(camera_index=-1)
+    with pytest.raises(ValidationError):
+        CameraFramePayload(quality=20)
+    with pytest.raises(ValidationError):
+        CameraFramePayload(quality=105)
+
+
+def test_capture_camera_jpeg_and_release():
+    data = capture_camera_jpeg(camera_index=0, max_width=640, max_height=480, quality=60)
+    assert "frame" in data
+    assert "width" in data
+    assert "height" in data
+    assert "camera_index" in data
+    assert data["camera_index"] == 0
+    assert isinstance(data["frame"], str)
+    decoded = base64.b64decode(data["frame"])
+    assert len(decoded) > 0
+    release_camera()
+
+
+def test_dispatcher_camera_frame(test_setup):
+    dispatcher = test_setup["dispatcher"]
+    envelope = create_envelope(
+        setup=test_setup,
+        command_id=CommandCatalog.CAMERA_FRAME,
+        payload={"camera_index": 0, "max_width": 640, "max_height": 480, "quality": 60}
+    )
+
+    result = dispatcher.dispatch(envelope)
+    assert result.status == ExecutionStatus.SUCCESS
+    assert result.command_id == "CAMERA_FRAME"
+    assert "frame" in result.data
+    assert "width" in result.data
+    assert "height" in result.data
+    assert result.data["camera_index"] == 0
+    release_camera()
+
