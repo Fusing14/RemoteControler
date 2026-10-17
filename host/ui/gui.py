@@ -26,7 +26,14 @@ from host.core.security.anti_replay import AntiReplayValidator
 from host.core.security.rate_limiter import RateLimiter
 from host.core.audit.logger import AuditLogger
 from host.engine.dispatcher import CommandDispatcher
-from host.engine.handlers.unlock import has_unlock_pin, set_unlock_pin, clear_unlock_pin
+from host.engine.handlers.unlock import (
+    has_unlock_pin,
+    set_unlock_pin,
+    clear_unlock_pin,
+    is_elevated_admin,
+    relaunch_as_admin,
+)
+from host.core.network.wol import get_primary_physical_mac, get_broadcast_ip
 from host.transport.network_utils import get_tailscale_ip, validate_bind_address
 from host.transport.server import create_app
 
@@ -63,6 +70,14 @@ class HostDashboardApp:
         self.is_running = False
         self.server_ip = "127.0.0.1" if dev_mode else (get_tailscale_ip() or "127.0.0.1")
         self.server_port = int(self.config.get("port", 8443))
+
+        self.is_admin = is_elevated_admin()
+        try:
+            self.mac_address = get_primary_physical_mac()
+            self.broadcast_ip = get_broadcast_ip()
+        except Exception:
+            self.mac_address = "No detectado"
+            self.broadcast_ip = "255.255.255.255"
 
         self._qr_image_ref = None  # Evitar recolección de basura en Tkinter
 
@@ -190,6 +205,17 @@ class HostDashboardApp:
         self.lbl_pin_status.grid(row=2, column=1, sticky="w", padx=10, pady=2)
         self._update_pin_status_label()
 
+        ttk.Label(info_grid, text="Wake-on-LAN (MAC):", style="CardMuted.TLabel").grid(row=3, column=0, sticky="w", pady=2)
+        mac_text = f"{self.mac_address} (Listo)" if self.mac_address and self.mac_address != "No detectado" else "No detectado"
+        self.lbl_wol = ttk.Label(info_grid, text=mac_text, style="Card.TLabel", font=("Consolas", 10))
+        self.lbl_wol.grid(row=3, column=1, sticky="w", padx=10, pady=2)
+
+        ttk.Label(info_grid, text="Permisos de Windows:", style="CardMuted.TLabel").grid(row=4, column=0, sticky="w", pady=2)
+        perm_text = "Administrador (Elevado - Desbloqueo Total)" if self.is_admin else "Usuario Estándar (Sin elevación)"
+        perm_color = COLOR_SUCCESS if self.is_admin else COLOR_WARNING
+        self.lbl_perms = tk.Label(info_grid, text=perm_text, fg=perm_color, bg=CARD_BG, font=("Segoe UI", 9, "bold"))
+        self.lbl_perms.grid(row=4, column=1, sticky="w", padx=10, pady=2)
+
         # Botonera de acciones de servidor
         btn_row = ttk.Frame(server_card, style="Card.TFrame")
         btn_row.pack(fill="x", padx=14, pady=(0, 12))
@@ -257,6 +283,23 @@ class HostDashboardApp:
             cursor="hand2",
         )
         self.btn_update.pack(side="left", padx=4)
+
+        if not self.is_admin:
+            self.btn_elevate = tk.Button(
+                btn_row,
+                text="🛡️ Ejecutar como Admin",
+                command=self._relaunch_admin,
+                bg="#D97706",
+                fg="#FFFFFF",
+                activebackground="#B45309",
+                activeforeground="#FFFFFF",
+                font=("Segoe UI", 9, "bold"),
+                relief="flat",
+                padx=10,
+                pady=6,
+                cursor="hand2",
+            )
+            self.btn_elevate.pack(side="left", padx=4)
 
         # 3. Tarjeta: Preferencias y Persistencia
         prefs_card = self._create_card(main_container, "Preferencias de Sesión y Arranque")
@@ -657,6 +700,25 @@ class HostDashboardApp:
                 self.root.after(0, lambda: self.btn_update.config(state="normal", text="Actualizar Servidor"))
 
         threading.Thread(target=run_update, daemon=True).start()
+
+    def _relaunch_admin(self) -> None:
+        """Solicita elevación UAC y relanza la GUI con permisos de Administrador."""
+        if messagebox.askyesno(
+            "Elevar Privilegios UAC",
+            "¿Deseas reiniciar RemoteControler Host con permisos de Administrador?\n\n"
+            "Esto activa el desbloqueo real de Windows en Winlogon (tscon) y control total de procesos.",
+            parent=self.root,
+        ):
+            self._stop_server()
+            if relaunch_as_admin():
+                self.root.destroy()
+            else:
+                messagebox.showerror(
+                    "Error de Elevación",
+                    "No se pudo elevar a Administrador. Verifica los permisos de usuario de Windows.",
+                    parent=self.root,
+                )
+                self._start_server()
 
 
 

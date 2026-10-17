@@ -13,6 +13,8 @@ import '../crypto/canonical.dart';
 class PairingClient {
   static const String keyPairedEndpoint = 'rc_paired_endpoint_v1';
   static const String keyPairedHostDeviceId = 'rc_paired_host_device_id_v1';
+  static const String keyPairedMacAddress = 'rc_paired_mac_address';
+  static const String keyPairedBroadcastIp = 'rc_paired_broadcast_ip';
 
   final KeyManager _keyManager;
   final SecureStorageAdapter _storage;
@@ -45,7 +47,8 @@ class PairingClient {
     try {
       challenge = json.decode(qrContent) as Map<String, dynamic>;
     } catch (e) {
-      throw const SecurityStorageException('El código QR escaneado no contiene un formato JSON válido.');
+      throw const SecurityStorageException(
+          'El código QR escaneado no contiene un formato JSON válido.');
     }
 
     final requiredFields = [
@@ -58,7 +61,8 @@ class PairingClient {
     ];
     for (final field in requiredFields) {
       if (!challenge.containsKey(field)) {
-        throw SecurityStorageException('Código QR incompleto: falta el campo obligatorio "$field".');
+        throw SecurityStorageException(
+            'Código QR incompleto: falta el campo obligatorio "$field".');
       }
     }
 
@@ -66,7 +70,8 @@ class PairingClient {
     final expiresAt = challenge['expires_at'] as int;
     final now = DateTime.now().toUtc().millisecondsSinceEpoch ~/ 1000;
     if (now > expiresAt) {
-      throw const SecurityStorageException('El código QR de emparejamiento ha expirado. Genera uno nuevo en el Host.');
+      throw const SecurityStorageException(
+          'El código QR de emparejamiento ha expirado. Genera uno nuevo en el Host.');
     }
 
     // 2. Verificación criptográfica de la firma del Host
@@ -112,11 +117,13 @@ class PairingClient {
 
     http.Response response;
     try {
-      response = await _httpClient.post(
-        url,
-        headers: {'Content-Type': 'application/json'},
-        body: requestBody,
-      ).timeout(const Duration(seconds: 10));
+      response = await _httpClient
+          .post(
+            url,
+            headers: {'Content-Type': 'application/json'},
+            body: requestBody,
+          )
+          .timeout(const Duration(seconds: 10));
     } catch (e) {
       throw SecurityStorageException(
         'Fallo de conexión al contactar el Host en $endpoint. '
@@ -125,12 +132,25 @@ class PairingClient {
     }
 
     if (response.statusCode != 200) {
-      throw SecurityStorageException('El Host rechazó el emparejamiento (HTTP ${response.statusCode}).');
+      throw SecurityStorageException(
+          'El Host rechazó el emparejamiento (HTTP ${response.statusCode}).');
     }
 
     // 4. Persistencia del endpoint verificado en Hardware Keystore / Keychain
     await _storage.write(keyPairedEndpoint, endpoint);
-    await _storage.write(keyPairedHostDeviceId, challenge['host_device_id'] as String);
+    await _storage.write(
+        keyPairedHostDeviceId, challenge['host_device_id'] as String);
+
+    if (challenge.containsKey('mac_address') &&
+        challenge['mac_address'] != null) {
+      await _storage.write(
+          keyPairedMacAddress, challenge['mac_address'] as String);
+    }
+    if (challenge.containsKey('broadcast_ip') &&
+        challenge['broadcast_ip'] != null) {
+      await _storage.write(
+          keyPairedBroadcastIp, challenge['broadcast_ip'] as String);
+    }
 
     return endpoint;
   }
@@ -145,10 +165,32 @@ class PairingClient {
     return _storage.read(keyPairedHostDeviceId);
   }
 
+  /// Recupera la dirección MAC guardada para Wake-on-LAN.
+  Future<String?> getPairedMacAddress() async {
+    return _storage.read(keyPairedMacAddress);
+  }
+
+  /// Guarda o actualiza la dirección MAC para Wake-on-LAN.
+  Future<void> savePairedMacAddress(String mac) async {
+    await _storage.write(keyPairedMacAddress, mac);
+  }
+
+  /// Recupera la IP de difusión de la subred local.
+  Future<String?> getPairedBroadcastIp() async {
+    return _storage.read(keyPairedBroadcastIp);
+  }
+
+  /// Guarda la IP de difusión para Wake-on-LAN.
+  Future<void> savePairedBroadcastIp(String ip) async {
+    await _storage.write(keyPairedBroadcastIp, ip);
+  }
+
   /// Desvincula el teléfono del Host y purga los secretos de sesión.
   Future<void> unpair() async {
     await _storage.delete(keyPairedEndpoint);
     await _storage.delete(keyPairedHostDeviceId);
+    await _storage.delete(keyPairedMacAddress);
+    await _storage.delete(keyPairedBroadcastIp);
   }
 
   static Uint8List _hexToBytes(String hex) {

@@ -25,6 +25,7 @@ class CommandCatalog(str, Enum):
     MIC_AUDIO_CHUNK = "MIC_AUDIO_CHUNK"
     RUNNING_APPS_LIST = "RUNNING_APPS_LIST"
     APP_CLOSE = "APP_CLOSE"
+    HOST_INFO = "HOST_INFO"
 
 
 class MediaAction(str, Enum):
@@ -310,6 +311,13 @@ class AppClosePayload(BaseModel):
     force: bool = Field(default=False, description="True para forzar el cierre inmediato (SIGKILL/TerminateProcess).")
 
 
+class HostInfoPayload(BaseModel):
+    """
+    Payload para consultar información del host (MAC física, IP broadcast, nombre de equipo).
+    """
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
 CommandPayloadType = Union[
     MediaPayload,
     PowerPayload,
@@ -324,6 +332,7 @@ CommandPayloadType = Union[
     OpenUrlPayload,
     RunningAppsListPayload,
     AppClosePayload,
+    HostInfoPayload,
 ]
 
 COMMAND_PAYLOAD_SCHEMA_MAP: Dict[CommandCatalog, type[BaseModel]] = {
@@ -340,6 +349,7 @@ COMMAND_PAYLOAD_SCHEMA_MAP: Dict[CommandCatalog, type[BaseModel]] = {
     CommandCatalog.OPEN_URL: OpenUrlPayload,
     CommandCatalog.RUNNING_APPS_LIST: RunningAppsListPayload,
     CommandCatalog.APP_CLOSE: AppClosePayload,
+    CommandCatalog.HOST_INFO: HostInfoPayload,
 }
 
 

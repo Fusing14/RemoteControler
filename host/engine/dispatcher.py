@@ -25,7 +25,10 @@ from host.engine.contracts.commands import (
     OpenUrlPayload,
     RunningAppsListPayload,
     AppClosePayload,
+    HostInfoPayload,
 )
+import socket
+from host.core.network.wol import get_primary_physical_mac, get_broadcast_ip
 from host.engine.contracts.envelope import SignedEnvelope
 from host.core.storage.device_store import TrustedDeviceStore
 from host.core.security.anti_replay import AntiReplayValidator
@@ -215,6 +218,16 @@ class CommandDispatcher:
                 assert isinstance(parsed_payload, OpenUrlPayload)
                 opened = execute_open_url(parsed_payload.url)
                 extra_data = {"url": opened}
+            elif envelope.command_id == CommandCatalog.HOST_INFO:
+                assert isinstance(parsed_payload, HostInfoPayload)
+                mac = get_primary_physical_mac()
+                bcast = get_broadcast_ip()
+                dev_name = socket.gethostname()
+                extra_data = {
+                    "mac_address": mac,
+                    "broadcast_ip": bcast,
+                    "device_name": dev_name,
+                }
             else:
                 raise ValueError(f"Comando no soportado: {envelope.command_id}")
 
@@ -230,6 +243,8 @@ class CommandDispatcher:
                 success_msg = f"Aplicación PID {extra_data.get('pid')} cerrada exitosamente."
             elif envelope.command_id == CommandCatalog.MIC_AUDIO_CHUNK:
                 success_msg = "Fragmento de audio procesado."
+            elif envelope.command_id == CommandCatalog.HOST_INFO:
+                success_msg = f"Información del host obtenida exitosamente: {extra_data.get('device_name')} ({extra_data.get('mac_address')})"
             else:
                 success_msg = f"Comando {envelope.command_id.value} ejecutado exitosamente."
 

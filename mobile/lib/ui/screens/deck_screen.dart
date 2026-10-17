@@ -13,6 +13,7 @@ import 'camera_viewer_screen.dart';
 import 'games_screen.dart';
 import 'apps_screen.dart';
 import '../../services/updater_service.dart';
+import '../../services/wol_service.dart';
 
 /// Pantalla principal estilo Stream Deck con cuadrícula táctil reactiva.
 class DeckScreen extends StatefulWidget {
@@ -42,8 +43,10 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
   // Estado del micrófono (Intercom en tiempo real)
   bool _isMicStreaming = false;
   StreamSubscription? _micStreamSub;
-  static const MethodChannel _micMethodChannel = MethodChannel('com.remotecontroler.securedeck/mic');
-  static const EventChannel _micEventChannel = EventChannel('com.remotecontroler.securedeck/mic_stream');
+  static const MethodChannel _micMethodChannel =
+      MethodChannel('com.remotecontroler.securedeck/mic');
+  static const EventChannel _micEventChannel =
+      EventChannel('com.remotecontroler.securedeck/mic_stream');
 
   @override
   void initState() {
@@ -68,6 +71,9 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
     _stateSubscription = client.stateStream.listen((state) {
       if (mounted) {
         setState(() => _connectionState = state);
+        if (state == DeckConnectionState.connected) {
+          _fetchHostInfo();
+        }
       }
     });
 
@@ -101,15 +107,19 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
 
   Future<void> _startMic() async {
     try {
-      final hasPerm = await _micMethodChannel.invokeMethod<bool>('hasPermission') ?? false;
+      final hasPerm =
+          await _micMethodChannel.invokeMethod<bool>('hasPermission') ?? false;
       if (!hasPerm) {
         await _micMethodChannel.invokeMethod('requestPermission');
-        final granted = await _micMethodChannel.invokeMethod<bool>('hasPermission') ?? false;
+        final granted =
+            await _micMethodChannel.invokeMethod<bool>('hasPermission') ??
+                false;
         if (!granted) {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(
-                content: Text('Permiso de micrófono requerido para transmitir audio.'),
+                content: Text(
+                    'Permiso de micrófono requerido para transmitir audio.'),
                 backgroundColor: Color(0xFFEF4444),
               ),
             );
@@ -120,7 +130,10 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
 
       _micStreamSub = _micEventChannel.receiveBroadcastStream().listen(
         (chunk) {
-          if (_isMicStreaming && _controlClient != null && chunk is String && chunk.isNotEmpty) {
+          if (_isMicStreaming &&
+              _controlClient != null &&
+              chunk is String &&
+              chunk.isNotEmpty) {
             _sendCommand('MIC_AUDIO_CHUNK', {
               'audio_b64': chunk,
               'sample_rate': 16000,
@@ -187,7 +200,8 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _sendCommand(String commandId, Map<String, dynamic> payload) async {
+  Future<void> _sendCommand(
+      String commandId, Map<String, dynamic> payload) async {
     if (_controlClient == null) {
       final km = widget.keyManager ?? widget.pairingClient.keyManager;
       await km.ensureInitialized();
@@ -213,7 +227,8 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
             backgroundColor: const Color(0xFFEF4444),
             content: Text(
               e.toString().replaceAll('Exception: ', ''),
-              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+              style: const TextStyle(
+                  color: Colors.white, fontWeight: FontWeight.w600),
             ),
             duration: const Duration(seconds: 2),
           ),
@@ -232,20 +247,26 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: const Color(0xFF1E2230),
-        title: Text(title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-        content: Text(message, style: const TextStyle(color: Color(0xFF94A3B8))),
+        title: Text(title,
+            style: const TextStyle(
+                color: Colors.white, fontWeight: FontWeight.bold)),
+        content:
+            Text(message, style: const TextStyle(color: Color(0xFF94A3B8))),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
+            child:
+                const Text('Cancelar', style: TextStyle(color: Colors.white54)),
           ),
           ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFEF4444)),
+            style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFEF4444)),
             onPressed: () {
               Navigator.pop(ctx);
               onConfirm();
             },
-            child: const Text('Ejecutar', style: TextStyle(color: Colors.white)),
+            child:
+                const Text('Ejecutar', style: TextStyle(color: Colors.white)),
           ),
         ],
       ),
@@ -262,14 +283,19 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
         builder: (context, setDialogState) {
           return AlertDialog(
             backgroundColor: const Color(0xFF161A23),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
             title: const Row(
               children: [
-                Icon(Icons.lock_open_rounded, color: Color(0xFF06B6D4), size: 26),
+                Icon(Icons.lock_open_rounded,
+                    color: Color(0xFF06B6D4), size: 26),
                 SizedBox(width: 10),
                 Text(
                   'Desbloquear PC',
-                  style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                  style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold),
                 ),
               ],
             ),
@@ -289,7 +315,8 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
                   style: const TextStyle(color: Colors.white, fontSize: 14),
                   decoration: InputDecoration(
                     hintText: 'PIN o Contraseña de Windows',
-                    hintStyle: const TextStyle(color: Colors.white30, fontSize: 14),
+                    hintStyle:
+                        const TextStyle(color: Colors.white30, fontSize: 14),
                     filled: true,
                     fillColor: const Color(0xFF0F1117),
                     border: OutlineInputBorder(
@@ -315,15 +342,19 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(ctx),
-                child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
+                child: const Text('Cancelar',
+                    style: TextStyle(color: Colors.white54)),
               ),
               ElevatedButton.icon(
                 style: ElevatedButton.styleFrom(
                   backgroundColor: const Color(0xFF06B6D4),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8)),
                 ),
                 icon: const Icon(Icons.check, size: 18, color: Colors.white),
-                label: const Text('Desbloquear', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                label: const Text('Desbloquear',
+                    style: TextStyle(
+                        color: Colors.white, fontWeight: FontWeight.bold)),
                 onPressed: () async {
                   final pwd = passwordController.text;
                   if (pwd.isEmpty) return;
@@ -348,11 +379,15 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Row(
           children: [
-            Icon(Icons.open_in_browser_rounded, color: Color(0xFF0EA5E9), size: 26),
+            Icon(Icons.open_in_browser_rounded,
+                color: Color(0xFF0EA5E9), size: 26),
             SizedBox(width: 10),
             Text(
               'Abrir URL en el PC',
-              style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+              style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold),
             ),
           ],
         ),
@@ -379,7 +414,8 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
                   borderSide: BorderSide.none,
                 ),
                 suffixIcon: IconButton(
-                  icon: const Icon(Icons.paste_rounded, color: Color(0xFF0EA5E9), size: 20),
+                  icon: const Icon(Icons.paste_rounded,
+                      color: Color(0xFF0EA5E9), size: 20),
                   tooltip: 'Pegar del portapapeles',
                   onPressed: () async {
                     final clip = await Clipboard.getData(Clipboard.kTextPlain);
@@ -393,18 +429,26 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
             const SizedBox(height: 14),
             const Text(
               'Accesos directos rápidos:',
-              style: TextStyle(color: Color(0xFF64748B), fontSize: 11, fontWeight: FontWeight.bold),
+              style: TextStyle(
+                  color: Color(0xFF64748B),
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 8),
             Wrap(
               spacing: 6,
               runSpacing: 6,
               children: [
-                _buildUrlShortcutChip('YouTube', 'https://youtube.com', urlController),
-                _buildUrlShortcutChip('GitHub', 'https://github.com', urlController),
-                _buildUrlShortcutChip('Twitch', 'https://twitch.tv', urlController),
-                _buildUrlShortcutChip('Google', 'https://google.com', urlController),
-                _buildUrlShortcutChip('ChatGPT', 'https://chatgpt.com', urlController),
+                _buildUrlShortcutChip(
+                    'YouTube', 'https://youtube.com', urlController),
+                _buildUrlShortcutChip(
+                    'GitHub', 'https://github.com', urlController),
+                _buildUrlShortcutChip(
+                    'Twitch', 'https://twitch.tv', urlController),
+                _buildUrlShortcutChip(
+                    'Google', 'https://google.com', urlController),
+                _buildUrlShortcutChip(
+                    'ChatGPT', 'https://chatgpt.com', urlController),
               ],
             ),
           ],
@@ -412,15 +456,20 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
+            child:
+                const Text('Cancelar', style: TextStyle(color: Colors.white54)),
           ),
           ElevatedButton.icon(
             style: ElevatedButton.styleFrom(
               backgroundColor: const Color(0xFF0EA5E9),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8)),
             ),
-            icon: const Icon(Icons.launch_rounded, size: 18, color: Colors.white),
-            label: const Text('Abrir en PC', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+            icon:
+                const Icon(Icons.launch_rounded, size: 18, color: Colors.white),
+            label: const Text('Abrir en PC',
+                style: TextStyle(
+                    color: Colors.white, fontWeight: FontWeight.bold)),
             onPressed: () async {
               final raw = urlController.text.trim();
               if (raw.isEmpty) return;
@@ -433,7 +482,8 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
     );
   }
 
-  Widget _buildUrlShortcutChip(String label, String url, TextEditingController controller) {
+  Widget _buildUrlShortcutChip(
+      String label, String url, TextEditingController controller) {
     return InkWell(
       onTap: () => controller.text = url,
       borderRadius: BorderRadius.circular(6),
@@ -446,10 +496,149 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
         ),
         child: Text(
           label,
-          style: const TextStyle(color: Color(0xFFCBD5E1), fontSize: 11, fontWeight: FontWeight.w600),
+          style: const TextStyle(
+              color: Color(0xFFCBD5E1),
+              fontSize: 11,
+              fontWeight: FontWeight.w600),
         ),
       ),
     );
+  }
+
+  Future<void> _fetchHostInfo() async {
+    try {
+      final res = await _controlClient?.sendCommand(
+        commandId: 'HOST_INFO',
+        payload: {},
+      );
+      if (res != null && res['status'] == 'SUCCESS') {
+        final data = res['data'] as Map<String, dynamic>?;
+        if (data != null) {
+          final mac = data['mac_address'] as String?;
+          final bcast = data['broadcast_ip'] as String?;
+          if (mac != null && mac.trim().isNotEmpty) {
+            await widget.pairingClient.savePairedMacAddress(mac.trim());
+          }
+          if (bcast != null && bcast.trim().isNotEmpty) {
+            await widget.pairingClient.savePairedBroadcastIp(bcast.trim());
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('[DeckScreen] No se pudo obtener HOST_INFO: $e');
+    }
+  }
+
+  Future<void> _wakeOnLan() async {
+    String? mac = await widget.pairingClient.getPairedMacAddress();
+    final bcast = await widget.pairingClient.getPairedBroadcastIp();
+
+    if (mac == null || mac.trim().isEmpty) {
+      if (!mounted) return;
+      final enteredMac = await showDialog<String>(
+        context: context,
+        builder: (ctx) {
+          final ctrl = TextEditingController();
+          return AlertDialog(
+            backgroundColor: const Color(0xFF161A23),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            title: const Row(
+              children: [
+                Icon(Icons.power_rounded, color: Color(0xFF10B981)),
+                SizedBox(width: 8),
+                Text('Wake-on-LAN',
+                    style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold)),
+              ],
+            ),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Introduce la dirección MAC física de la tarjeta de red del PC (ej: 30:56:0F:23:15:2C):',
+                  style: TextStyle(color: Color(0xFF94A3B8), fontSize: 13),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: ctrl,
+                  style: const TextStyle(
+                      color: Colors.white, fontFamily: 'Consolas'),
+                  decoration: InputDecoration(
+                    hintText: 'XX:XX:XX:XX:XX:XX',
+                    hintStyle: const TextStyle(color: Colors.white38),
+                    filled: true,
+                    fillColor: const Color(0xFF0F1117),
+                    border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8)),
+                  ),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Cancelar',
+                    style: TextStyle(color: Colors.white54)),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF10B981)),
+                onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
+                child: const Text('Guardar y Encender',
+                    style: TextStyle(
+                        color: Colors.white, fontWeight: FontWeight.bold)),
+              ),
+            ],
+          );
+        },
+      );
+      if (enteredMac == null || enteredMac.trim().isEmpty) return;
+      mac = enteredMac.trim();
+      await widget.pairingClient.savePairedMacAddress(mac);
+    }
+
+    try {
+      await WolService.wake(macAddress: mac, broadcastIp: bcast);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            backgroundColor: const Color(0xFF10B981),
+            content: Row(
+              children: [
+                const Icon(Icons.bolt_rounded, color: Colors.white, size: 20),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Paquete Mágico Wake-on-LAN transmitido a $mac',
+                    style: const TextStyle(
+                        color: Colors.white, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ],
+            ),
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            backgroundColor: const Color(0xFFEF4444),
+            content: Text(
+              'Error Wake-on-LAN: ${e.toString().replaceAll('ArgumentError: ', '')}',
+              style: const TextStyle(
+                  color: Colors.white, fontWeight: FontWeight.bold),
+            ),
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    }
   }
 
   Future<void> _checkForUpdates({bool silent = false}) async {
@@ -478,7 +667,8 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
             backgroundColor: const Color(0xFF10B981),
             content: Text(
               'Ya tienes la versión más reciente (v${info.currentVersion})',
-              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+              style: const TextStyle(
+                  color: Colors.white, fontWeight: FontWeight.w600),
             ),
             duration: const Duration(seconds: 2),
           ),
@@ -491,7 +681,8 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
             backgroundColor: const Color(0xFFEF4444),
             content: Text(
               'Error al buscar actualizaciones: ${e.toString().replaceAll('Exception: ', '')}',
-              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+              style: const TextStyle(
+                  color: Colors.white, fontWeight: FontWeight.w600),
             ),
             duration: const Duration(seconds: 3),
           ),
@@ -513,7 +704,10 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
             Expanded(
               child: Text(
                 'Actualización Disponible',
-                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18),
+                style: TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 18),
               ),
             ),
           ],
@@ -535,7 +729,8 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
                     'Actual: v${info.currentVersion}',
                     style: const TextStyle(color: Colors.white60, fontSize: 13),
                   ),
-                  const Icon(Icons.arrow_forward, color: Color(0xFF6366F1), size: 16),
+                  const Icon(Icons.arrow_forward,
+                      color: Color(0xFF6366F1), size: 16),
                   Text(
                     'Nueva: v${info.latestVersion}',
                     style: const TextStyle(
@@ -547,11 +742,15 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
                 ],
               ),
             ),
-            if (info.releaseNotes != null && info.releaseNotes!.trim().isNotEmpty) ...[
+            if (info.releaseNotes != null &&
+                info.releaseNotes!.trim().isNotEmpty) ...[
               const SizedBox(height: 14),
               const Text(
                 'Notas de la versión:',
-                style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w600, fontSize: 12),
+                style: TextStyle(
+                    color: Colors.white70,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 12),
               ),
               const SizedBox(height: 6),
               Container(
@@ -565,7 +764,8 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
                 child: SingleChildScrollView(
                   child: Text(
                     info.releaseNotes!,
-                    style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 12),
+                    style:
+                        const TextStyle(color: Color(0xFF94A3B8), fontSize: 12),
                   ),
                 ),
               ),
@@ -575,28 +775,34 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('Más tarde', style: TextStyle(color: Colors.white54)),
+            child: const Text('Más tarde',
+                style: TextStyle(color: Colors.white54)),
           ),
-            ElevatedButton.icon(
+          ElevatedButton.icon(
             style: ElevatedButton.styleFrom(
               backgroundColor: const Color(0xFF6366F1),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8)),
             ),
             icon: const Icon(Icons.download, size: 18, color: Colors.white),
-            label: const Text('Actualizar ahora', style: TextStyle(color: Colors.white)),
+            label: const Text('Actualizar ahora',
+                style: TextStyle(color: Colors.white)),
             onPressed: () {
               Navigator.pop(ctx);
               final url = info.downloadUrl;
               if (url != null && url.startsWith('https://')) {
-                debugPrint('[OTA] Usuario confirmó actualización. Iniciando descarga: $url');
+                debugPrint(
+                    '[OTA] Usuario confirmó actualización. Iniciando descarga: $url');
                 _startDownloadAndInstall(url);
               } else {
-                debugPrint('[OTA] Error: URL de descarga nula o no segura: $url');
+                debugPrint(
+                    '[OTA] Error: URL de descarga nula o no segura: $url');
                 if (mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(
                       backgroundColor: Color(0xFFEF4444),
-                      content: Text('Error: La URL de descarga no es válida o segura.'),
+                      content: Text(
+                          'Error: La URL de descarga no es válida o segura.'),
                     ),
                   );
                 }
@@ -609,7 +815,8 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
   }
 
   void _startDownloadAndInstall(String downloadUrl) {
-    debugPrint('[OTA] Iniciando flujo de actualización OTA desde: $downloadUrl');
+    debugPrint(
+        '[OTA] Iniciando flujo de actualización OTA desde: $downloadUrl');
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -641,7 +848,8 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
             try {
               otaSub ??= _updaterService.startOtaUpdate(downloadUrl).listen(
                 (event) {
-                  debugPrint('[OTA] Cambio de estado OtaUpdate: status=${event.status.name}, value=${event.value}');
+                  debugPrint(
+                      '[OTA] Cambio de estado OtaUpdate: status=${event.status.name}, value=${event.value}');
                   switch (event.status) {
                     case OtaStatus.DOWNLOADING:
                       final val = int.tryParse(event.value ?? '0') ?? 0;
@@ -652,59 +860,71 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
                       });
                       break;
                     case OtaStatus.INSTALLING:
-                      debugPrint('[OTA] Descarga completada al 100%. Invocando instalador nativo de Android...');
+                      debugPrint(
+                          '[OTA] Descarga completada al 100%. Invocando instalador nativo de Android...');
                       safeSetState(() {
                         progress = 1.0;
-                        statusText = 'Abriendo instalador de Android... Sigue las instrucciones del sistema.';
+                        statusText =
+                            'Abriendo instalador de Android... Sigue las instrucciones del sistema.';
                       });
                       Future.delayed(const Duration(seconds: 2), () {
                         closeDialog();
                       });
                       break;
                     case OtaStatus.PERMISSION_NOT_GRANTED_ERROR:
-                      debugPrint('[OTA] ERROR: Permiso para instalar apps de origen desconocido no concedido.');
+                      debugPrint(
+                          '[OTA] ERROR: Permiso para instalar apps de origen desconocido no concedido.');
                       safeSetState(() {
                         hasError = true;
-                        statusText = 'Permiso denegado. Habilita "Instalar apps desconocidas" para SecureDeck en Ajustes de Android.';
+                        statusText =
+                            'Permiso denegado. Habilita "Instalar apps desconocidas" para SecureDeck en Ajustes de Android.';
                       });
                       break;
                     case OtaStatus.ALREADY_RUNNING_ERROR:
-                      debugPrint('[OTA] ERROR: Ya existe una descarga o actualización en curso.');
+                      debugPrint(
+                          '[OTA] ERROR: Ya existe una descarga o actualización en curso.');
                       safeSetState(() {
                         hasError = true;
                         statusText = 'Ya hay una actualización en curso.';
                       });
                       break;
                     case OtaStatus.INTERNAL_ERROR:
-                      debugPrint('[OTA] ERROR INTERNO en OtaUpdate: ${event.value}');
+                      debugPrint(
+                          '[OTA] ERROR INTERNO en OtaUpdate: ${event.value}');
                       safeSetState(() {
                         hasError = true;
-                        statusText = 'Error al actualizar: ${event.value ?? event.status.name}';
+                        statusText =
+                            'Error al actualizar: ${event.value ?? event.status.name}';
                       });
                       break;
                     default:
-                      debugPrint('[OTA] Estado no controlado: ${event.status.name} (valor: ${event.value})');
+                      debugPrint(
+                          '[OTA] Estado no controlado: ${event.status.name} (valor: ${event.value})');
                       safeSetState(() {
                         hasError = true;
-                        statusText = 'Estado: ${event.status.name} (${event.value ?? ""})';
+                        statusText =
+                            'Estado: ${event.status.name} (${event.value ?? ""})';
                       });
                       break;
                   }
                 },
                 onError: (err, stackTrace) {
-                  debugPrint('[OTA] Error capturado en stream OtaUpdate: $err\n$stackTrace');
+                  debugPrint(
+                      '[OTA] Error capturado en stream OtaUpdate: $err\n$stackTrace');
                   safeSetState(() {
                     hasError = true;
                     statusText = 'Error en la actualización: $err';
                   });
                 },
                 onDone: () {
-                  debugPrint('[OTA] Stream de OtaUpdate finalizado exitosamente (onDone).');
+                  debugPrint(
+                      '[OTA] Stream de OtaUpdate finalizado exitosamente (onDone).');
                 },
                 cancelOnError: true,
               );
             } catch (e, stackTrace) {
-              debugPrint('[OTA] Excepción síncrona al conectar stream: $e\n$stackTrace');
+              debugPrint(
+                  '[OTA] Excepción síncrona al conectar stream: $e\n$stackTrace');
               safeSetState(() {
                 hasError = true;
                 statusText = 'Error al iniciar descarga: $e';
@@ -713,14 +933,18 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
 
             return AlertDialog(
               backgroundColor: const Color(0xFF161A23),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16)),
               title: const Row(
                 children: [
                   Icon(Icons.system_update_alt, color: Color(0xFF6366F1)),
                   SizedBox(width: 12),
                   Text(
                     'Instalando actualización',
-                    style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                    style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold),
                   ),
                 ],
               ),
@@ -731,16 +955,22 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
                   Text(
                     statusText,
                     style: TextStyle(
-                      color: hasError ? const Color(0xFFEF4444) : const Color(0xFFCBD5E1),
+                      color: hasError
+                          ? const Color(0xFFEF4444)
+                          : const Color(0xFFCBD5E1),
                       fontSize: 13,
                     ),
                   ),
                   const SizedBox(height: 16),
                   LinearProgressIndicator(
-                    value: (progress > 0 && progress <= 1.0 && !hasError) ? progress : null,
+                    value: (progress > 0 && progress <= 1.0 && !hasError)
+                        ? progress
+                        : null,
                     backgroundColor: const Color(0xFF0F1117),
                     valueColor: AlwaysStoppedAnimation<Color>(
-                      hasError ? const Color(0xFFEF4444) : const Color(0xFF6366F1),
+                      hasError
+                          ? const Color(0xFFEF4444)
+                          : const Color(0xFF6366F1),
                     ),
                   ),
                 ],
@@ -749,7 +979,8 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
                 if (hasError || progress >= 1.0)
                   TextButton(
                     onPressed: closeDialog,
-                    child: const Text('Cerrar', style: TextStyle(color: Colors.white54)),
+                    child: const Text('Cerrar',
+                        style: TextStyle(color: Colors.white54)),
                   ),
               ],
             );
@@ -800,7 +1031,10 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
         const SizedBox(width: 8),
         Text(
           label,
-          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFFCBD5E1)),
+          style: const TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: Color(0xFFCBD5E1)),
         ),
       ],
     );
@@ -831,13 +1065,15 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
             onPressed: () {
               _confirmCriticalAction(
                 title: 'Desvincular Host',
-                message: '¿Estás seguro de que deseas desvincular este teléfono del PC?',
+                message:
+                    '¿Estás seguro de que deseas desvincular este teléfono del PC?',
                 onConfirm: () async {
                   await widget.pairingClient.unpair();
                   if (mounted) {
                     Navigator.of(context).pushReplacement(
                       MaterialPageRoute(
-                        builder: (_) => ScannerScreen(pairingClient: widget.pairingClient),
+                        builder: (_) =>
+                            ScannerScreen(pairingClient: widget.pairingClient),
                       ),
                     );
                   }
@@ -876,25 +1112,29 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
                     label: 'Play / Pause',
                     icon: Icons.play_arrow_rounded,
                     accentColor: const Color(0xFF6366F1), // Indigo
-                    onPressed: () => _sendCommand('MEDIA', {'action': 'PLAY_PAUSE'}),
+                    onPressed: () =>
+                        _sendCommand('MEDIA', {'action': 'PLAY_PAUSE'}),
                   ),
                   DeckButton(
                     label: 'Mute',
                     icon: Icons.volume_off_rounded,
                     accentColor: const Color(0xFF8B5CF6), // Violeta
-                    onPressed: () => _sendCommand('MEDIA', {'action': 'VOLUME_MUTE'}),
+                    onPressed: () =>
+                        _sendCommand('MEDIA', {'action': 'VOLUME_MUTE'}),
                   ),
                   DeckButton(
                     label: 'Volumen +',
                     icon: Icons.volume_up_rounded,
                     accentColor: const Color(0xFF3B82F6), // Azul
-                    onPressed: () => _sendCommand('MEDIA', {'action': 'VOLUME_UP'}),
+                    onPressed: () =>
+                        _sendCommand('MEDIA', {'action': 'VOLUME_UP'}),
                   ),
                   DeckButton(
                     label: 'Volumen -',
                     icon: Icons.volume_down_rounded,
                     accentColor: const Color(0xFF0EA5E9), // Sky
-                    onPressed: () => _sendCommand('MEDIA', {'action': 'VOLUME_DOWN'}),
+                    onPressed: () =>
+                        _sendCommand('MEDIA', {'action': 'VOLUME_DOWN'}),
                   ),
                 ],
               ),
@@ -925,14 +1165,16 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
                     subtitle: 'LockWorkStation',
                     icon: Icons.lock_rounded,
                     accentColor: const Color(0xFFF59E0B), // Ámbar
-                    onPressed: () => _sendCommand('SYS_POWER', {'action': 'LOCK'}),
+                    onPressed: () =>
+                        _sendCommand('SYS_POWER', {'action': 'LOCK'}),
                   ),
                   DeckButton(
                     label: 'Suspender',
                     subtitle: 'SetSuspendState',
                     icon: Icons.bedtime_rounded,
                     accentColor: const Color(0xFF06B6D4), // Cyan
-                    onPressed: () => _sendCommand('SYS_POWER', {'action': 'SLEEP', 'force': false}),
+                    onPressed: () => _sendCommand(
+                        'SYS_POWER', {'action': 'SLEEP', 'force': false}),
                   ),
                   DeckButton(
                     label: 'Reiniciar',
@@ -942,7 +1184,8 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
                       _confirmCriticalAction(
                         title: 'Reiniciar PC',
                         message: '¿Confirmas reiniciar el equipo de inmediato?',
-                        onConfirm: () => _sendCommand('SYS_POWER', {'action': 'REBOOT', 'force': true}),
+                        onConfirm: () => _sendCommand(
+                            'SYS_POWER', {'action': 'REBOOT', 'force': true}),
                       );
                       return Future.value();
                     },
@@ -955,7 +1198,8 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
                       _confirmCriticalAction(
                         title: 'Apagar PC',
                         message: '¿Confirmas el apagado del PC?',
-                        onConfirm: () => _sendCommand('SYS_POWER', {'action': 'SHUTDOWN', 'force': true}),
+                        onConfirm: () => _sendCommand(
+                            'SYS_POWER', {'action': 'SHUTDOWN', 'force': true}),
                       );
                       return Future.value();
                     },
@@ -967,6 +1211,16 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
                     accentColor: const Color(0xFF06B6D4), // Cyan
                     onPressed: () {
                       _showUnlockPcDialog();
+                      return Future.value();
+                    },
+                  ),
+                  DeckButton(
+                    label: 'Encender PC',
+                    subtitle: 'Wake-on-LAN',
+                    icon: Icons.power_rounded,
+                    accentColor: const Color(0xFF10B981), // Esmeralda
+                    onPressed: () {
+                      _wakeOnLan();
                       return Future.value();
                     },
                   ),
@@ -1003,7 +1257,8 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
                       if (_controlClient != null) {
                         Navigator.of(context).push(
                           MaterialPageRoute(
-                            builder: (_) => ScreenViewerScreen(controlClient: _controlClient!),
+                            builder: (_) => ScreenViewerScreen(
+                                controlClient: _controlClient!),
                           ),
                         );
                       }
@@ -1019,7 +1274,8 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
                       if (_controlClient != null) {
                         Navigator.of(context).push(
                           MaterialPageRoute(
-                            builder: (_) => CameraViewerScreen(controlClient: _controlClient!),
+                            builder: (_) => CameraViewerScreen(
+                                controlClient: _controlClient!),
                           ),
                         );
                       }
@@ -1027,10 +1283,17 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
                     },
                   ),
                   DeckButton(
-                    label: _isMicStreaming ? 'Micrófono (ON)' : 'Micrófono al PC',
-                    subtitle: _isMicStreaming ? 'Transmitiendo en vivo' : 'Intercom / Walkie-Talkie',
-                    icon: _isMicStreaming ? Icons.mic_rounded : Icons.mic_none_rounded,
-                    accentColor: _isMicStreaming ? const Color(0xFFEF4444) : const Color(0xFFEC4899), // Rojo si activo / Rosa
+                    label:
+                        _isMicStreaming ? 'Micrófono (ON)' : 'Micrófono al PC',
+                    subtitle: _isMicStreaming
+                        ? 'Transmitiendo en vivo'
+                        : 'Intercom / Walkie-Talkie',
+                    icon: _isMicStreaming
+                        ? Icons.mic_rounded
+                        : Icons.mic_none_rounded,
+                    accentColor: _isMicStreaming
+                        ? const Color(0xFFEF4444)
+                        : const Color(0xFFEC4899), // Rojo si activo / Rosa
                     onPressed: () {
                       _toggleMic();
                       return Future.value();
@@ -1045,7 +1308,8 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
                       if (_controlClient != null) {
                         Navigator.of(context).push(
                           MaterialPageRoute(
-                            builder: (_) => GamesScreen(controlClient: _controlClient!),
+                            builder: (_) =>
+                                GamesScreen(controlClient: _controlClient!),
                           ),
                         );
                       }
@@ -1061,7 +1325,8 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
                       if (_controlClient != null) {
                         Navigator.of(context).push(
                           MaterialPageRoute(
-                            builder: (_) => AppsScreen(controlClient: _controlClient!),
+                            builder: (_) =>
+                                AppsScreen(controlClient: _controlClient!),
                           ),
                         );
                       }

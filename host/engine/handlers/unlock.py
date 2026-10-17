@@ -7,12 +7,61 @@ PIN de Windows Hello (cifrado en reposo con Windows DPAPI en %APPDATA%\\RemoteCo
 import logging
 import os
 import secrets
+import subprocess
 import sys
 import time
 from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger("RemoteControler.UnlockHandler")
+
+
+def is_elevated_admin() -> bool:
+    """Comprueba si el proceso actual cuenta con privilegios de Administrador (UAC elevado)."""
+    if sys.platform != "win32":
+        return os.getuid() == 0 if hasattr(os, "getuid") else False
+    try:
+        import ctypes
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        return False
+
+
+def get_current_session_id() -> int:
+    """Obtiene el ID de sesión de Windows del proceso actual."""
+    if sys.platform != "win32":
+        return 1
+    try:
+        import ctypes
+        from ctypes import wintypes
+        session_id = wintypes.DWORD()
+        if ctypes.windll.kernel32.ProcessIdToSessionId(os.getpid(), ctypes.byref(session_id)):
+            return session_id.value
+    except Exception as e:
+        logger.debug("Error obteniendo session_id: %s", e)
+    return 1
+
+
+def relaunch_as_admin() -> bool:
+    """Solicita elevación UAC y relanza el proceso actual con privilegios de Administrador."""
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+        params = " ".join(f'"{arg}"' for arg in sys.argv[1:])
+        cmd_file = sys.argv[0]
+        ret = ctypes.windll.shell32.ShellExecuteW(
+            None,
+            "runas",
+            sys.executable,
+            f'"{cmd_file}" {params}'.strip(),
+            None,
+            1,
+        )
+        return ret > 32
+    except Exception as e:
+        logger.error("Error al solicitar elevación UAC: %s", e)
+        return False
 
 
 class UnlockAuthenticationError(Exception):
@@ -190,63 +239,102 @@ def execute_unlock_pc(password_or_pin: str, username: Optional[str] = None) -> N
         user32.SendMessageW(HWND_BROADCAST, WM_SYSCOMMAND, SC_MONITORPOWER, -1)
         time.sleep(0.3)
 
-        # 2. Levantar la cortina de la pantalla de bloqueo (Escape + Space, esperar 650ms)
-        VK_ESCAPE = 0x1B
-        VK_SPACE = 0x20
-        VK_RETURN = 0x0D
-        KEYEVENTF_KEYUP = 0x0002
-        KEYEVENTF_UNICODE = 0x0004
-        KEYEVENTF_SCANCODE = 0x0008
+        # 2. Mecanismo primario: Desbloqueo directo de sesión mediante tscon.exe (si tiene privilegios de admin/SYSTEM)
+        session_id = get_current_session_id()
+        system_root = os.environ.get("SystemRoot", r"C:\Windows")
+        tscon_path = os.path.join(system_root, "System32", "tscon.exe")
+        tscon_success = False
 
-        # Escape
-        sc_esc = user32.MapVirtualKeyW(VK_ESCAPE, 0)
-        user32.keybd_event(VK_ESCAPE, sc_esc, 0, 0)
-        user32.keybd_event(VK_ESCAPE, sc_esc, KEYEVENTF_KEYUP, 0)
-        time.sleep(0.15)
+        if os.path.exists(tscon_path):
+            try:
+                logger.info("Intentando desbloqueo rápido de sesión mediante tscon.exe (Sesión %d)...", session_id)
+                res = subprocess.run([tscon_path, str(session_id), "/dest:console"], capture_output=True, timeout=5)
+                if res.returncode == 0:
+                    logger.info("Sesión desbloqueada exitosamente mediante tscon.exe.")
+                    tscon_success = True
+                else:
+                    logger.debug("tscon devolvió código %d: %s", res.returncode, res.stderr.decode(errors="ignore"))
+            except Exception as ex:
+                logger.debug("Fallo al invocar tscon.exe: %s", ex)
 
-        # Space
-        sc_space = user32.MapVirtualKeyW(VK_SPACE, 0)
-        user32.keybd_event(VK_SPACE, sc_space, 0, 0)
-        user32.keybd_event(VK_SPACE, sc_space, KEYEVENTF_KEYUP, 0)
+        if tscon_success:
+            return
 
-        # Esperar a que la cortina suba completamente (650ms)
-        time.sleep(0.65)
+        # 3. Mecanismo secundario: Acoplar hilo a escritorio Winlogon / InputDesktop y simular teclado
+        h_desk = None
+        GENERIC_ALL = 0x10000000
+        try:
+            h_desk = user32.OpenInputDesktop(0, False, GENERIC_ALL)
+            if not h_desk:
+                h_desk = user32.OpenDesktopW("Winlogon", 0, False, GENERIC_ALL)
+            if h_desk:
+                user32.SetThreadDesktop(h_desk)
+        except Exception as ex:
+            logger.debug("No se pudo acoplar el hilo al escritorio Winlogon: %s", ex)
 
-        # 3. Inyectar caracteres de credencial usando scan codes de hardware
-        for ch in password_or_pin:
-            vk_scan = user32.VkKeyScanW(ord(ch))
-            vk = vk_scan & 0xFF
-            shift = (vk_scan >> 8) & 1
+        try:
+            # Levantar la cortina de la pantalla de bloqueo (Escape + Space, esperar 900ms para Win 11)
+            VK_ESCAPE = 0x1B
+            VK_SPACE = 0x20
+            VK_RETURN = 0x0D
+            KEYEVENTF_KEYUP = 0x0002
+            KEYEVENTF_UNICODE = 0x0004
 
-            if vk != 0xFF and vk != 0:
-                sc = user32.MapVirtualKeyW(vk, 0)
-                VK_SHIFT = 0x10
-                sc_shift = user32.MapVirtualKeyW(VK_SHIFT, 0)
+            # Escape
+            sc_esc = user32.MapVirtualKeyW(VK_ESCAPE, 0)
+            user32.keybd_event(VK_ESCAPE, sc_esc, 0, 0)
+            user32.keybd_event(VK_ESCAPE, sc_esc, KEYEVENTF_KEYUP, 0)
+            time.sleep(0.15)
 
-                if shift:
-                    user32.keybd_event(VK_SHIFT, sc_shift, 0, 0)
+            # Space
+            sc_space = user32.MapVirtualKeyW(VK_SPACE, 0)
+            user32.keybd_event(VK_SPACE, sc_space, 0, 0)
+            user32.keybd_event(VK_SPACE, sc_space, KEYEVENTF_KEYUP, 0)
 
-                user32.keybd_event(vk, sc, 0, 0)
-                user32.keybd_event(vk, sc, KEYEVENTF_KEYUP, 0)
+            # Esperar a que la cortina suba completamente (900ms en Windows 11/10)
+            time.sleep(0.9)
 
-                if shift:
-                    user32.keybd_event(VK_SHIFT, sc_shift, KEYEVENTF_KEYUP, 0)
-            else:
-                # Fallback Unicode para caracteres exóticos
-                code = ord(ch)
-                user32.keybd_event(0, code, KEYEVENTF_UNICODE, 0)
-                user32.keybd_event(0, code, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP, 0)
+            # Inyectar caracteres de credencial usando scan codes de hardware
+            for ch in password_or_pin:
+                vk_scan = user32.VkKeyScanW(ord(ch))
+                vk = vk_scan & 0xFF
+                shift = (vk_scan >> 8) & 1
 
-            time.sleep(0.02)
+                if vk != 0xFF and vk != 0:
+                    sc = user32.MapVirtualKeyW(vk, 0)
+                    VK_SHIFT = 0x10
+                    sc_shift = user32.MapVirtualKeyW(VK_SHIFT, 0)
 
-        time.sleep(0.1)
+                    if shift:
+                        user32.keybd_event(VK_SHIFT, sc_shift, 0, 0)
 
-        # 4. Pulsar Enter para confirmar
-        sc_return = user32.MapVirtualKeyW(VK_RETURN, 0)
-        user32.keybd_event(VK_RETURN, sc_return, 0, 0)
-        user32.keybd_event(VK_RETURN, sc_return, KEYEVENTF_KEYUP, 0)
+                    user32.keybd_event(vk, sc, 0, 0)
+                    user32.keybd_event(vk, sc, KEYEVENTF_KEYUP, 0)
 
-        logger.info("Secuencia de desbloqueo de Windows enviada exitosamente.")
+                    if shift:
+                        user32.keybd_event(VK_SHIFT, sc_shift, KEYEVENTF_KEYUP, 0)
+                else:
+                    # Fallback Unicode para caracteres exóticos
+                    code = ord(ch)
+                    user32.keybd_event(0, code, KEYEVENTF_UNICODE, 0)
+                    user32.keybd_event(0, code, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP, 0)
+
+                time.sleep(0.02)
+
+            time.sleep(0.1)
+
+            # Pulsar Enter para confirmar
+            sc_return = user32.MapVirtualKeyW(VK_RETURN, 0)
+            user32.keybd_event(VK_RETURN, sc_return, 0, 0)
+            user32.keybd_event(VK_RETURN, sc_return, KEYEVENTF_KEYUP, 0)
+
+            logger.info("Secuencia de desbloqueo de Windows enviada exitosamente.")
+        finally:
+            if h_desk:
+                try:
+                    user32.CloseDesktop(h_desk)
+                except Exception:
+                    pass
 
     except Exception as e:
         logger.error("Fallo al enviar secuencia de desbloqueo Win32: %s", e)

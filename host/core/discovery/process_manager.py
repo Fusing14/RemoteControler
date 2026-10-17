@@ -62,6 +62,27 @@ class AppCloseSecurityError(AppCloseError):
     pass
 
 
+TH32CS_SNAPPROCESS = 0x00000002
+
+
+if sys.platform == "win32":
+    class PROCESSENTRY32(ctypes.Structure):
+        _fields_ = [
+            ("dwSize", wintypes.DWORD),
+            ("cntUsage", wintypes.DWORD),
+            ("th32ProcessID", wintypes.DWORD),
+            ("th32DefaultHeapID", ctypes.c_size_t),
+            ("th32ModuleID", wintypes.DWORD),
+            ("cntThreads", wintypes.DWORD),
+            ("th32ParentProcessID", wintypes.DWORD),
+            ("pcPriClassBase", wintypes.LONG),
+            ("dwFlags", wintypes.DWORD),
+            ("szExeFile", ctypes.c_wchar * 260),
+        ]
+else:
+    PROCESSENTRY32 = None  # type: ignore
+
+
 def get_process_name_by_pid(pid: int) -> str:
     """Obtiene el nombre del ejecutable a partir de su Process ID."""
     if sys.platform != "win32":
@@ -85,18 +106,24 @@ def get_process_name_by_pid(pid: int) -> str:
 
 def list_running_apps() -> List[Dict[str, Any]]:
     """
-    Enumera las aplicaciones reales que el usuario tiene abiertas con ventanas visibles en Windows.
-    Filtra procesos en segundo plano, ventanas invisibles o herramientas de sistema.
+    Enumera las aplicaciones en ejecución clasificadas en:
+    1. 'primary': Ventanas principales interactivas en la barra de tareas (GW_OWNER == 0, visibles, no-cloaked).
+       Ordena la ventana en primer plano (GetForegroundWindow) en primer lugar.
+    2. 'background': Procesos secundarios de usuario en la misma sesión de Windows (sin ventana interactiva de barra de tareas).
     """
     if sys.platform != "win32":
         return [
-            {"pid": 1234, "name": "Code.exe", "title": "VS Code - RemoteControler", "hwnd": 1001},
-            {"pid": 5678, "name": "chrome.exe", "title": "Google Chrome", "hwnd": 1002},
+            {"pid": 1234, "name": "Code.exe", "title": "VS Code - RemoteControler", "hwnd": 1001, "category": "primary", "is_foreground": True},
+            {"pid": 5678, "name": "chrome.exe", "title": "Google Chrome", "hwnd": 1002, "category": "primary", "is_foreground": False},
+            {"pid": 9012, "name": "spotify.exe", "title": "Spotify Free", "hwnd": 0, "category": "background", "is_foreground": False},
+            {"pid": 3456, "name": "discord.exe", "title": "Discord Background", "hwnd": 0, "category": "background", "is_foreground": False},
         ]
 
     user32 = ctypes.windll.user32
     kernel32 = ctypes.windll.kernel32
     dwmapi = ctypes.windll.dwmapi
+
+    fg_hwnd = user32.GetForegroundWindow()
 
     # Intentar obtener el escritorio interactivo activo
     h_input = user32.OpenInputDesktop(0, False, 0x0100)
@@ -139,6 +166,13 @@ def list_running_apps() -> List[Dict[str, Any]]:
             if (ex_style & WS_EX_TOOLWINDOW) and not (ex_style & WS_EX_APPWINDOW):
                 return True
 
+            # Comprobar ventana propietaria (GW_OWNER = 4)
+            GW_OWNER = 4
+            owner = user32.GetWindow(hwnd, GW_OWNER)
+            if owner != 0 and not (ex_style & WS_EX_APPWINDOW):
+                # Es una ventana modal o popup secundario, no la ventana principal de la barra de tareas
+                return True
+
             pid = wintypes.DWORD()
             user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
             if pid.value <= 4:
@@ -152,11 +186,14 @@ def list_running_apps() -> List[Dict[str, Any]]:
             if name.lower() == "explorer.exe" and title in ("Program Manager", ""):
                 return True
 
+            is_fg = bool(hwnd == fg_hwnd)
             raw_apps.append({
                 "pid": int(pid.value),
                 "name": name,
                 "title": title,
                 "hwnd": int(hwnd),
+                "category": "primary",
+                "is_foreground": is_fg,
             })
         except Exception as ex:
             logger.debug("Error procesando ventana %s: %s", hwnd, ex)
@@ -171,20 +208,64 @@ def list_running_apps() -> List[Dict[str, Any]]:
     else:
         user32.EnumWindows(cb_func, 0)
 
-    # Deduplicar por PID manteniendo la ventana más descriptiva/larga
+    # Deduplicar por PID manteniendo la ventana en primer plano o la más descriptiva
     by_pid: Dict[int, Dict[str, Any]] = {}
     for app in raw_apps:
         pid = app["pid"]
         if pid not in by_pid:
             by_pid[pid] = app
         else:
-            # Si ya existe, preferir títulos más descriptivos o ventanas principales
-            if len(app["title"]) > len(by_pid[pid]["title"]):
+            if app.get("is_foreground") or len(app["title"]) > len(by_pid[pid]["title"]):
                 by_pid[pid] = app
 
-    result = list(by_pid.values())
-    result.sort(key=lambda a: a["name"].lower())
-    return result
+    primary_apps = list(by_pid.values())
+    # Ordenar: primero la ventana en primer plano si existe, luego orden alfabético
+    primary_apps.sort(key=lambda a: (not a.get("is_foreground", False), a["name"].lower()))
+    primary_pids = set(by_pid.keys())
+
+    # Enumerar procesos en segundo plano de la sesión de usuario
+    background_apps: List[Dict[str, Any]] = []
+    my_pid = os.getpid()
+    my_sid = wintypes.DWORD()
+    kernel32.ProcessIdToSessionId(my_pid, ctypes.byref(my_sid))
+
+    h_snap = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+    if h_snap and h_snap != -1:
+        try:
+            pe = PROCESSENTRY32()
+            pe.dwSize = ctypes.sizeof(PROCESSENTRY32)
+            if kernel32.Process32FirstW(h_snap, ctypes.byref(pe)):
+                while True:
+                    p_id = int(pe.th32ProcessID)
+                    exe_name = str(pe.szExeFile)
+                    lower_name = exe_name.lower()
+
+                    if (
+                        p_id > 4
+                        and p_id != my_pid
+                        and lower_name not in PROTECTED_PROCESS_NAMES
+                        and lower_name not in IGNORED_WINDOW_NAMES
+                        and p_id not in primary_pids
+                    ):
+                        proc_sid = wintypes.DWORD()
+                        if kernel32.ProcessIdToSessionId(p_id, ctypes.byref(proc_sid)):
+                            if proc_sid.value == my_sid.value:
+                                background_apps.append({
+                                    "pid": p_id,
+                                    "name": exe_name,
+                                    "title": exe_name,
+                                    "hwnd": 0,
+                                    "category": "background",
+                                    "is_foreground": False,
+                                })
+
+                    if not kernel32.Process32NextW(h_snap, ctypes.byref(pe)):
+                        break
+        finally:
+            kernel32.CloseHandle(h_snap)
+
+    background_apps.sort(key=lambda a: a["name"].lower())
+    return primary_apps + background_apps
 
 
 def close_running_app(pid: int, force: bool = False) -> Dict[str, Any]:

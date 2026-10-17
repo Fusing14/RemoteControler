@@ -39,6 +39,8 @@ class PairingChallengeModel(BaseModel):
     pairing_token: str = Field(..., description="Token de desafío de un solo uso generado por CSPRNG")
     expires_at: int = Field(..., description="Unix timestamp de expiración del token")
     signature: str = Field(..., description="Firma Ed25519 del Host sobre los datos canónicos del desafío")
+    mac_address: Optional[str] = Field(default=None, description="Dirección MAC física para Wake-on-LAN")
+    broadcast_ip: Optional[str] = Field(default=None, description="IP de difusión de la subred para Wake-on-LAN")
 
     def to_canonical_dict(self) -> Dict[str, Any]:
         """Extrae el diccionario canónico para firmar/verificar, omitiendo la firma."""
@@ -156,6 +158,15 @@ class PairingManager:
 
         signature = sign_canonical(priv_key, canonical_dict)
 
+        try:
+            from host.core.network.wol import get_primary_physical_mac, get_broadcast_ip
+            detected_mac = get_primary_physical_mac()
+            detected_bcast = get_broadcast_ip()
+        except Exception as e:
+            logger.debug("No se pudo autodetectar MAC para WoL: %s", e)
+            detected_mac = None
+            detected_bcast = None
+
         challenge = PairingChallengeModel(
             version=1,
             host_device_id=host_device_id,
@@ -164,6 +175,8 @@ class PairingManager:
             pairing_token=token,
             expires_at=expires_at,
             signature=signature,
+            mac_address=detected_mac,
+            broadcast_ip=detected_bcast,
         )
 
         self._active_challenge = challenge

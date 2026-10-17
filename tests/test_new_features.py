@@ -48,6 +48,13 @@ from host.engine.contracts.commands import (
     AppLaunchPayload,
     RunningAppsListPayload,
     AppClosePayload,
+    HostInfoPayload,
+)
+from host.core.network.wol import (
+    build_magic_packet,
+    get_primary_physical_mac,
+    get_broadcast_ip,
+    get_primary_adapter_info,
 )
 from host.engine.contracts.envelope import SignedEnvelope
 from host.engine.dispatcher import CommandDispatcher, ExecutionStatus
@@ -70,6 +77,8 @@ from host.engine.handlers.unlock import (
     clear_unlock_pin,
     get_pin_file_path,
     UnlockAuthenticationError,
+    is_elevated_admin,
+    get_current_session_id,
 )
 from host.core.storage.device_store import TrustedDeviceStore
 from host.core.security.anti_replay import AntiReplayValidator
@@ -687,6 +696,98 @@ def test_app_close_success(test_setup):
     finally:
         if proc.poll() is None:
             proc.kill()
+
+
+def test_wol_magic_packet_generation():
+    """Valida la generación de paquetes mágicos Wake-on-LAN estándar de 102 bytes."""
+    mac_colon = "30:56:0F:23:15:2C"
+    mac_dash = "30-56-0F-23-15-2C"
+
+    pkt1 = build_magic_packet(mac_colon)
+    pkt2 = build_magic_packet(mac_dash)
+
+    assert len(pkt1) == 102
+    assert len(pkt2) == 102
+    assert pkt1 == pkt2
+
+    # Primeros 6 bytes son 0xFF
+    assert pkt1[:6] == b"\xff" * 6
+
+    # 16 repeticiones de la MAC (6 bytes cada una)
+    expected_mac_bytes = bytes.fromhex("30560F23152C")
+    for i in range(16):
+        start = 6 + i * 6
+        assert pkt1[start:start + 6] == expected_mac_bytes
+
+    # Formato inválido lanza ValueError
+    with pytest.raises(ValueError):
+        build_magic_packet("invalid_mac")
+
+    with pytest.raises(ValueError):
+        build_magic_packet("00:11:22")
+
+
+def test_wol_adapter_detection():
+    """Valida la detección de adaptador físico y cálculo de broadcast IP para WoL."""
+    mac = get_primary_physical_mac()
+    assert isinstance(mac, str)
+    assert len(mac.split(":")) == 6
+
+    bcast = get_broadcast_ip()
+    assert isinstance(bcast, str)
+    assert len(bcast.split(".")) == 4
+
+    info = get_primary_adapter_info()
+    assert "mac" in info
+    assert "broadcast_ip" in info
+    assert "ipv4" in info
+    assert "description" in info
+
+
+def test_host_info_command(test_setup):
+    """Valida el despacho del comando HOST_INFO devolviendo MAC y datos del equipo."""
+    dispatcher = test_setup["dispatcher"]
+    envelope = create_envelope(
+        setup=test_setup,
+        command_id=CommandCatalog.HOST_INFO,
+        payload={}
+    )
+    result = dispatcher.dispatch(envelope)
+    assert result.status == ExecutionStatus.SUCCESS
+    assert result.command_id == "HOST_INFO"
+    assert "mac_address" in result.data
+    assert "broadcast_ip" in result.data
+    assert "device_name" in result.data
+    assert len(result.data["mac_address"].split(":")) == 6
+
+
+def test_running_apps_categorization():
+    """Valida la clasificación de procesos en primary y background."""
+    apps = list_running_apps()
+    assert isinstance(apps, list)
+    assert len(apps) > 0
+
+    categories = {a.get("category") for a in apps}
+    assert categories.issubset({"primary", "background"})
+    assert "primary" in categories
+
+    for app in apps:
+        assert "pid" in app
+        assert "name" in app
+        assert "title" in app
+        assert "category" in app
+        assert app["pid"] > 0
+        assert isinstance(app["name"], str)
+
+
+def test_unlock_elevation_and_session_helpers():
+    """Valida los inspectores de privilegios UAC y sesión de Windows."""
+    is_admin = is_elevated_admin()
+    assert isinstance(is_admin, bool)
+
+    session_id = get_current_session_id()
+    assert isinstance(session_id, int)
+    assert session_id >= 0
 
 
 
