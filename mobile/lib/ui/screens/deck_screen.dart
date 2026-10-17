@@ -521,7 +521,7 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
             onPressed: () => Navigator.pop(ctx),
             child: const Text('Más tarde', style: TextStyle(color: Colors.white54)),
           ),
-          ElevatedButton.icon(
+            ElevatedButton.icon(
             style: ElevatedButton.styleFrom(
               backgroundColor: const Color(0xFF6366F1),
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
@@ -530,8 +530,20 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
             label: const Text('Actualizar ahora', style: TextStyle(color: Colors.white)),
             onPressed: () {
               Navigator.pop(ctx);
-              if (info.downloadUrl != null) {
-                _startDownloadAndInstall(info.downloadUrl!);
+              final url = info.downloadUrl;
+              if (url != null && url.startsWith('https://')) {
+                debugPrint('[OTA] Usuario confirmó actualización. Iniciando descarga: $url');
+                _startDownloadAndInstall(url);
+              } else {
+                debugPrint('[OTA] Error: URL de descarga nula o no segura: $url');
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      backgroundColor: Color(0xFFEF4444),
+                      content: Text('Error: La URL de descarga no es válida o segura.'),
+                    ),
+                  );
+                }
               }
             },
           ),
@@ -541,6 +553,7 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
   }
 
   void _startDownloadAndInstall(String downloadUrl) {
+    debugPrint('[OTA] Iniciando flujo de actualización OTA desde: $downloadUrl');
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -548,63 +561,99 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
         double progress = 0.0;
         String statusText = 'Iniciando descarga...';
         bool hasError = false;
+        bool isDialogActive = true;
         StreamSubscription<OtaEvent>? otaSub;
 
         return StatefulBuilder(
           builder: (context, setModalState) {
-            otaSub ??= _updaterService.startOtaUpdate(downloadUrl).listen(
-              (event) {
-                switch (event.status) {
-                  case OtaStatus.DOWNLOADING:
-                    final val = int.tryParse(event.value ?? '0') ?? 0;
-                    setModalState(() {
-                      progress = val / 100.0;
-                      statusText = 'Descargando: $val%';
-                    });
-                    break;
-                  case OtaStatus.INSTALLING:
-                    setModalState(() {
-                      statusText = 'Abriendo instalador de Android...';
-                    });
-                    Future.delayed(const Duration(seconds: 1), () {
-                      if (dialogCtx.mounted) {
-                        Navigator.of(dialogCtx, rootNavigator: true).pop();
-                      }
-                    });
-                    break;
-                  case OtaStatus.PERMISSION_NOT_GRANTED_ERROR:
-                    setModalState(() {
-                      hasError = true;
-                      statusText = 'Permiso denegado para instalar APKs. Habilítalo en Ajustes.';
-                    });
-                    break;
-                  case OtaStatus.ALREADY_RUNNING_ERROR:
-                    setModalState(() {
-                      hasError = true;
-                      statusText = 'Ya hay una actualización en curso.';
-                    });
-                    break;
-                  case OtaStatus.INTERNAL_ERROR:
-                    setModalState(() {
-                      hasError = true;
-                      statusText = 'Error interno en la actualización (${event.status.name})';
-                    });
-                    break;
-                  default:
-                    setModalState(() {
-                      hasError = true;
-                      statusText = 'Error en la actualización (${event.status.name})';
-                    });
-                    break;
+            void safeSetState(VoidCallback fn) {
+              if (isDialogActive && dialogCtx.mounted) {
+                setModalState(fn);
+              }
+            }
+
+            void closeDialog() {
+              if (isDialogActive) {
+                isDialogActive = false;
+                otaSub?.cancel();
+                if (dialogCtx.mounted) {
+                  Navigator.of(dialogCtx, rootNavigator: true).pop();
                 }
-              },
-              onError: (err) {
-                setModalState(() {
-                  hasError = true;
-                  statusText = 'Error: $err';
-                });
-              },
-            );
+              }
+            }
+
+            try {
+              otaSub ??= _updaterService.startOtaUpdate(downloadUrl).listen(
+                (event) {
+                  debugPrint('[OTA] Cambio de estado OtaUpdate: status=${event.status.name}, value=${event.value}');
+                  switch (event.status) {
+                    case OtaStatus.DOWNLOADING:
+                      final val = int.tryParse(event.value ?? '0') ?? 0;
+                      debugPrint('[OTA] Progreso de descarga: $val%');
+                      safeSetState(() {
+                        progress = val / 100.0;
+                        statusText = 'Descargando actualización: $val%';
+                      });
+                      break;
+                    case OtaStatus.INSTALLING:
+                      debugPrint('[OTA] Descarga completada al 100%. Invocando instalador nativo de Android...');
+                      safeSetState(() {
+                        progress = 1.0;
+                        statusText = 'Abriendo instalador de Android... Sigue las instrucciones del sistema.';
+                      });
+                      Future.delayed(const Duration(seconds: 2), () {
+                        closeDialog();
+                      });
+                      break;
+                    case OtaStatus.PERMISSION_NOT_GRANTED_ERROR:
+                      debugPrint('[OTA] ERROR: Permiso para instalar apps de origen desconocido no concedido.');
+                      safeSetState(() {
+                        hasError = true;
+                        statusText = 'Permiso denegado. Habilita "Instalar apps desconocidas" para SecureDeck en Ajustes de Android.';
+                      });
+                      break;
+                    case OtaStatus.ALREADY_RUNNING_ERROR:
+                      debugPrint('[OTA] ERROR: Ya existe una descarga o actualización en curso.');
+                      safeSetState(() {
+                        hasError = true;
+                        statusText = 'Ya hay una actualización en curso.';
+                      });
+                      break;
+                    case OtaStatus.INTERNAL_ERROR:
+                      debugPrint('[OTA] ERROR INTERNO en OtaUpdate: ${event.value}');
+                      safeSetState(() {
+                        hasError = true;
+                        statusText = 'Error al actualizar: ${event.value ?? event.status.name}';
+                      });
+                      break;
+                    default:
+                      debugPrint('[OTA] Estado no controlado: ${event.status.name} (valor: ${event.value})');
+                      safeSetState(() {
+                        hasError = true;
+                        statusText = 'Estado: ${event.status.name} (${event.value ?? ""})';
+                      });
+                      break;
+                  }
+                },
+                onError: (err, stackTrace) {
+                  debugPrint('[OTA] Error capturado en stream OtaUpdate: $err\n$stackTrace');
+                  safeSetState(() {
+                    hasError = true;
+                    statusText = 'Error en la actualización: $err';
+                  });
+                },
+                onDone: () {
+                  debugPrint('[OTA] Stream de OtaUpdate finalizado exitosamente (onDone).');
+                },
+                cancelOnError: true,
+              );
+            } catch (e, stackTrace) {
+              debugPrint('[OTA] Excepción síncrona al conectar stream: $e\n$stackTrace');
+              safeSetState(() {
+                hasError = true;
+                statusText = 'Error al iniciar descarga: $e';
+              });
+            }
 
             return AlertDialog(
               backgroundColor: const Color(0xFF161A23),
@@ -641,12 +690,9 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
                 ],
               ),
               actions: [
-                if (hasError)
+                if (hasError || progress >= 1.0)
                   TextButton(
-                    onPressed: () {
-                      otaSub?.cancel();
-                      Navigator.of(dialogCtx, rootNavigator: true).pop();
-                    },
+                    onPressed: closeDialog,
                     child: const Text('Cerrar', style: TextStyle(color: Colors.white54)),
                   ),
               ],

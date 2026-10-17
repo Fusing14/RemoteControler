@@ -4,6 +4,7 @@ library;
 
 import 'dart:async';
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:ota_update/ota_update.dart';
@@ -46,6 +47,8 @@ class UpdaterService {
         ? '$currentVersion+$currentBuild'
         : currentVersion;
 
+    debugPrint('[UpdaterService] Comprobando actualizaciones... Versión instalada: $fullCurrent');
+
     final response = await _httpClient.get(
       Uri.parse(_releasesUrl),
       headers: {
@@ -66,17 +69,38 @@ class UpdaterService {
     final assets = data['assets'] as List<dynamic>? ?? [];
 
     String? apkDownloadUrl;
+
+    // 1. Priorizar explícitamente el artefacto oficial 'app-release.apk'
     for (final asset in assets) {
       if (asset is Map<String, dynamic>) {
         final name = asset['name'] as String? ?? '';
-        if (name == 'app-release.apk' || name.toLowerCase().endsWith('.apk')) {
-          apkDownloadUrl = asset['browser_download_url'] as String?;
+        final url = asset['browser_download_url'] as String? ?? '';
+        if (name == 'app-release.apk' && url.startsWith('https://')) {
+          apkDownloadUrl = url;
+          debugPrint('[UpdaterService] Encontrado asset oficial app-release.apk: $url');
           break;
         }
       }
     }
 
+    // 2. Fallback seguro a cualquier asset con extensión .apk y protocolo HTTPS
+    if (apkDownloadUrl == null) {
+      for (final asset in assets) {
+        if (asset is Map<String, dynamic>) {
+          final name = asset['name'] as String? ?? '';
+          final url = asset['browser_download_url'] as String? ?? '';
+          if (name.toLowerCase().endsWith('.apk') && url.startsWith('https://')) {
+            apkDownloadUrl = url;
+            debugPrint('[UpdaterService] Encontrado asset APK alternativo: $name ($url)');
+            break;
+          }
+        }
+      }
+    }
+
     final hasUpdate = isNewerVersion(tagName, currentVersion) && apkDownloadUrl != null;
+
+    debugPrint('[UpdaterService] Resultado: instalada=$currentVersion, última=$tagName, hasUpdate=$hasUpdate, url=$apkDownloadUrl');
 
     return UpdateInfo(
       hasUpdate: hasUpdate,
@@ -88,14 +112,56 @@ class UpdaterService {
   }
 
   /// Inicia la descarga y la instalación nativa del APK mediante FileProvider.
-  Stream<OtaEvent> startOtaUpdate(String downloadUrl) {
+  /// Envuelto en bloques try-catch asíncronos para evitar cierres inesperados (crashes).
+  Stream<OtaEvent> startOtaUpdate(String downloadUrl) async* {
+    final cleanUrl = downloadUrl.trim();
+    final uri = Uri.tryParse(cleanUrl);
+    if (uri == null || !uri.isScheme('https') || !cleanUrl.toLowerCase().endsWith('.apk')) {
+      debugPrint('[UpdaterService] Error: URL de descarga no válida (debe ser HTTPS y terminar en .apk): $cleanUrl');
+      yield OtaEvent(
+        OtaStatus.INTERNAL_ERROR,
+        'URL de descarga no válida (se requiere HTTPS terminado en .apk)',
+      );
+      return;
+    }
+
+    debugPrint('[UpdaterService] Invocando OtaUpdate().execute con URL: $cleanUrl');
+    Stream<OtaEvent> otaStream;
     try {
-      return OtaUpdate().execute(
-        downloadUrl,
+      otaStream = OtaUpdate().execute(
+        cleanUrl,
         destinationFilename: 'app-release.apk',
       );
-    } catch (e) {
-      throw Exception('Fallo al inicializar la actualización OTA: $e');
+    } catch (e, stackTrace) {
+      debugPrint('[UpdaterService] Excepción síncrona al iniciar OtaUpdate().execute: $e\n$stackTrace');
+      yield OtaEvent(OtaStatus.INTERNAL_ERROR, e.toString());
+      return;
+    }
+
+    try {
+      await for (final event in otaStream) {
+        debugPrint('[UpdaterService] OtaEvent: status=${event.status.name}, value=${event.value}');
+        yield event;
+      }
+    } catch (e, stackTrace) {
+      debugPrint('[UpdaterService] Excepción en stream de OtaUpdate: $e\n$stackTrace');
+      final errStr = e.toString().toLowerCase();
+      if (errStr.contains('permission') || errStr.contains('not_granted') || errStr.contains('install')) {
+        yield OtaEvent(
+          OtaStatus.PERMISSION_NOT_GRANTED_ERROR,
+          'Permiso de instalación denegado por el sistema.',
+        );
+      } else if (errStr.contains('already_running') || errStr.contains('running')) {
+        yield OtaEvent(
+          OtaStatus.ALREADY_RUNNING_ERROR,
+          'La actualización ya se encuentra en ejecución.',
+        );
+      } else {
+        yield OtaEvent(
+          OtaStatus.INTERNAL_ERROR,
+          'Fallo nativo durante la actualización: $e',
+        );
+      }
     }
   }
 
