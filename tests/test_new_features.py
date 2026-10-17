@@ -11,7 +11,10 @@ Pruebas unitarias para las nuevas funcionalidades del Host:
 
 import base64
 import json
+import os
 import secrets
+import subprocess
+import sys
 import time
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -43,12 +46,20 @@ from host.engine.contracts.commands import (
     AppsListPayload,
     OpenUrlPayload,
     AppLaunchPayload,
+    RunningAppsListPayload,
+    AppClosePayload,
 )
 from host.engine.contracts.envelope import SignedEnvelope
 from host.engine.dispatcher import CommandDispatcher, ExecutionStatus
 from host.engine.handlers.screen import capture_screen_jpeg
 from host.engine.handlers.camera import capture_camera_jpeg, release_camera, CameraManager
 from host.engine.handlers.audio_stream import play_audio_chunk, AudioStreamError, AudioPlayerWorker
+from host.core.discovery.process_manager import (
+    list_running_apps,
+    close_running_app,
+    AppCloseError,
+    AppCloseSecurityError,
+)
 from host.engine.handlers.apps import execute_open_url, execute_app_command
 from host.engine.handlers.unlock import (
     verify_windows_password,
@@ -572,5 +583,110 @@ def test_dispatcher_mic_audio_chunk(test_setup):
     assert result.status == ExecutionStatus.SUCCESS
     assert result.command_id == "MIC_AUDIO_CHUNK"
     assert result.data == {"played": True}
+
+
+def test_screen_frame_multi_monitor(test_setup):
+    dispatcher = test_setup["dispatcher"]
+
+    # Probar captura de monitor 1
+    data1 = capture_screen_jpeg(max_width=640, max_height=360, quality=60, monitor_index=1)
+    assert "frame" in data1
+    assert "monitor_count" in data1
+    assert data1["monitor_count"] >= 1
+    assert data1["monitor_index"] == 1
+    assert isinstance(data1["monitors"], list)
+
+    # Probar captura de todas las pantallas combinadas (índice 0)
+    data0 = capture_screen_jpeg(max_width=640, max_height=360, quality=60, monitor_index=0)
+    assert "frame" in data0
+    assert data0["monitor_index"] == 0
+
+    # Despacho mediante dispatcher
+    envelope = create_envelope(
+        setup=test_setup,
+        command_id=CommandCatalog.SCREEN_FRAME,
+        payload={"max_width": 640, "max_height": 360, "quality": 60, "monitor_index": 1}
+    )
+    result = dispatcher.dispatch(envelope)
+    assert result.status == ExecutionStatus.SUCCESS
+    assert result.command_id == "SCREEN_FRAME"
+    assert "monitor_count" in result.data
+    assert result.data["monitor_index"] == 1
+
+
+def test_running_apps_list(test_setup):
+    dispatcher = test_setup["dispatcher"]
+
+    apps = list_running_apps()
+    assert isinstance(apps, list)
+
+    envelope = create_envelope(
+        setup=test_setup,
+        command_id=CommandCatalog.RUNNING_APPS_LIST,
+        payload={}
+    )
+    result = dispatcher.dispatch(envelope)
+    assert result.status == ExecutionStatus.SUCCESS
+    assert result.command_id == "RUNNING_APPS_LIST"
+    assert "apps" in result.data
+    assert isinstance(result.data["apps"], list)
+
+
+def test_app_close_security_protection(test_setup):
+    dispatcher = test_setup["dispatcher"]
+    current_pid = os.getpid()
+
+    # Intentar cerrar el propio proceso del servidor Host debe fallar por seguridad
+    with pytest.raises(AppCloseSecurityError):
+        close_running_app(current_pid, force=False)
+
+    envelope_self = create_envelope(
+        setup=test_setup,
+        command_id=CommandCatalog.APP_CLOSE,
+        payload={"pid": current_pid, "force": False}
+    )
+    result_self = dispatcher.dispatch(envelope_self)
+    assert result_self.status == ExecutionStatus.ERROR
+    assert result_self.error_code == "APP_CLOSE_FORBIDDEN"
+
+    # Intentar cerrar PID del sistema (PID <= 4)
+    with pytest.raises(AppCloseSecurityError):
+        close_running_app(4, force=True)
+
+    envelope_sys = create_envelope(
+        setup=test_setup,
+        command_id=CommandCatalog.APP_CLOSE,
+        payload={"pid": 4, "force": True}
+    )
+    result_sys = dispatcher.dispatch(envelope_sys)
+    assert result_sys.status == ExecutionStatus.ERROR
+    assert result_sys.error_code == "APP_CLOSE_FORBIDDEN"
+
+
+def test_app_close_success(test_setup):
+    dispatcher = test_setup["dispatcher"]
+
+    # Lanzar proceso temporal inocuo
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(15)"])
+    try:
+        assert proc.poll() is None
+
+        envelope = create_envelope(
+            setup=test_setup,
+            command_id=CommandCatalog.APP_CLOSE,
+            payload={"pid": proc.pid, "force": True}
+        )
+        result = dispatcher.dispatch(envelope)
+        assert result.status == ExecutionStatus.SUCCESS
+        assert result.command_id == "APP_CLOSE"
+        assert result.data["closed"] is True
+
+        # Esperar a que el proceso termine
+        time.sleep(0.5)
+        assert proc.poll() is not None
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+
 
 

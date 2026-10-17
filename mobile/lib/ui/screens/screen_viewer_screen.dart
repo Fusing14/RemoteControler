@@ -5,7 +5,8 @@ import 'package:flutter/material.dart';
 
 import '../../transport/control_client.dart';
 
-/// Pantalla para visualización del escritorio del PC en tiempo real con zoom interactivo.
+/// Pantalla para visualización del escritorio del PC en tiempo real con zoom interactivo
+/// y soporte dinámico para múltiples monitores (Pantalla 1, Pantalla 2, Todas).
 class ScreenViewerScreen extends StatefulWidget {
   final RemoteControlClient controlClient;
 
@@ -27,6 +28,8 @@ class _ScreenViewerScreenState extends State<ScreenViewerScreen> {
   int _latencyMs = 0;
   bool _isLoading = true;
   String? _errorMessage;
+  int _monitorIndex = 1;
+  int _monitorCount = 1;
   final TransformationController _transformationController = TransformationController();
 
   @override
@@ -52,6 +55,7 @@ class _ScreenViewerScreenState extends State<ScreenViewerScreen> {
             'max_width': 1280,
             'max_height': 720,
             'quality': 65,
+            'monitor_index': _monitorIndex,
           },
         );
         stopwatch.stop();
@@ -60,10 +64,13 @@ class _ScreenViewerScreenState extends State<ScreenViewerScreen> {
         if (status == 'SUCCESS') {
           final data = res['data'] as Map<String, dynamic>?;
           final frameB64 = data?['frame'] as String?;
+          final detectedCount = data?['monitor_count'] as int? ?? 1;
+
           if (frameB64 != null && mounted) {
             final bytes = base64Decode(frameB64);
             setState(() {
               _currentFrame = bytes;
+              _monitorCount = detectedCount;
               _latencyMs = stopwatch.elapsedMilliseconds;
               _isLoading = false;
               _errorMessage = null;
@@ -98,7 +105,7 @@ class _ScreenViewerScreenState extends State<ScreenViewerScreen> {
       }
 
       // Pequeño descanso entre frames para no saturar la CPU ni el enlace de red
-      await Future.delayed(const Duration(milliseconds: 150));
+      await Future.delayed(const Duration(milliseconds: 120));
     }
   }
 
@@ -106,8 +113,30 @@ class _ScreenViewerScreenState extends State<ScreenViewerScreen> {
     _transformationController.value = Matrix4.identity();
   }
 
+  void _selectMonitor(int index) {
+    if (_monitorIndex == index) return;
+    setState(() {
+      _monitorIndex = index;
+      _isLoading = true;
+      _errorMessage = null;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          index == 0 ? 'Mostrando todas las pantallas combinadas' : 'Cambiando a Pantalla $index',
+        ),
+        duration: const Duration(seconds: 1),
+        backgroundColor: const Color(0xFF8B5CF6),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final titleText = _monitorIndex == 0
+        ? 'Todas las Pantallas'
+        : 'Pantalla $_monitorIndex${_monitorCount > 1 ? "/$_monitorCount" : ""}';
+
     return Scaffold(
       backgroundColor: const Color(0xFF090A0F),
       appBar: AppBar(
@@ -116,9 +145,9 @@ class _ScreenViewerScreenState extends State<ScreenViewerScreen> {
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              'Pantalla en Vivo',
-              style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.white),
+            Text(
+              titleText,
+              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.white),
             ),
             if (!_isLoading && _errorMessage == null)
               Text(
@@ -128,6 +157,51 @@ class _ScreenViewerScreenState extends State<ScreenViewerScreen> {
           ],
         ),
         actions: [
+          if (_monitorCount > 1)
+            PopupMenuButton<int>(
+              icon: const Icon(Icons.screenshot_monitor_rounded, color: Color(0xFF8B5CF6)),
+              tooltip: 'Cambiar Pantalla',
+              initialValue: _monitorIndex,
+              onSelected: _selectMonitor,
+              itemBuilder: (ctx) {
+                final items = <PopupMenuEntry<int>>[];
+                for (int i = 1; i <= _monitorCount; i++) {
+                  items.add(
+                    PopupMenuItem<int>(
+                      value: i,
+                      child: Row(
+                        children: [
+                          Icon(
+                            _monitorIndex == i ? Icons.check_circle_rounded : Icons.desktop_windows_rounded,
+                            color: _monitorIndex == i ? const Color(0xFF10B981) : Colors.white70,
+                            size: 20,
+                          ),
+                          const SizedBox(width: 10),
+                          Text('Pantalla $i${i == 1 ? " (Principal)" : ""}'),
+                        ],
+                      ),
+                    ),
+                  );
+                }
+                items.add(
+                  PopupMenuItem<int>(
+                    value: 0,
+                    child: Row(
+                      children: [
+                        Icon(
+                          _monitorIndex == 0 ? Icons.check_circle_rounded : Icons.grid_view_rounded,
+                          color: _monitorIndex == 0 ? const Color(0xFF10B981) : Colors.white70,
+                          size: 20,
+                        ),
+                        const SizedBox(width: 10),
+                        const Text('Todas las pantallas'),
+                      ],
+                    ),
+                  ),
+                );
+                return items;
+              },
+            ),
           IconButton(
             icon: const Icon(Icons.zoom_out_map, color: Colors.white70),
             tooltip: 'Restablecer Zoom',
@@ -150,6 +224,53 @@ class _ScreenViewerScreenState extends State<ScreenViewerScreen> {
           ),
         ],
       ),
+      bottomNavigationBar: _monitorCount > 1
+          ? Container(
+              color: const Color(0xFF11141C),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: SafeArea(
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      for (int i = 1; i <= _monitorCount; i++) ...[
+                        ChoiceChip(
+                          label: Text('Pantalla $i${i == 1 ? " (Principal)" : ""}'),
+                          selected: _monitorIndex == i,
+                          selectedColor: const Color(0xFF8B5CF6),
+                          backgroundColor: const Color(0xFF1E2230),
+                          labelStyle: TextStyle(
+                            color: _monitorIndex == i ? Colors.white : const Color(0xFF94A3B8),
+                            fontWeight: FontWeight.bold,
+                            fontSize: 12,
+                          ),
+                          onSelected: (val) {
+                            if (val) _selectMonitor(i);
+                          },
+                        ),
+                        const SizedBox(width: 8),
+                      ],
+                      ChoiceChip(
+                        label: const Text('Todas (0)'),
+                        selected: _monitorIndex == 0,
+                        selectedColor: const Color(0xFF8B5CF6),
+                        backgroundColor: const Color(0xFF1E2230),
+                        labelStyle: TextStyle(
+                          color: _monitorIndex == 0 ? Colors.white : const Color(0xFF94A3B8),
+                          fontWeight: FontWeight.bold,
+                          fontSize: 12,
+                        ),
+                        onSelected: (val) {
+                          if (val) _selectMonitor(0);
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            )
+          : null,
       body: SafeArea(
         child: Center(
           child: _isLoading && _currentFrame == null

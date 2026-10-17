@@ -23,6 +23,8 @@ from host.engine.contracts.commands import (
     UnlockPcPayload,
     AppsListPayload,
     OpenUrlPayload,
+    RunningAppsListPayload,
+    AppClosePayload,
 )
 from host.engine.contracts.envelope import SignedEnvelope
 from host.core.storage.device_store import TrustedDeviceStore
@@ -42,6 +44,12 @@ from host.core.discovery.game_scanner import (
     scan_epic_games,
 )
 from host.core.discovery.app_scanner import scan_installed_apps
+from host.core.discovery.process_manager import (
+    list_running_apps,
+    close_running_app,
+    AppCloseError,
+    AppCloseSecurityError,
+)
 from host.engine.handlers.media import execute_media_command, MediaExecutionError
 from host.engine.handlers.power import execute_power_command, PowerExecutionError
 from host.engine.handlers.apps import (
@@ -167,7 +175,8 @@ class CommandDispatcher:
                 extra_data = capture_screen_jpeg(
                     max_width=parsed_payload.max_width,
                     max_height=parsed_payload.max_height,
-                    quality=parsed_payload.quality
+                    quality=parsed_payload.quality,
+                    monitor_index=parsed_payload.monitor_index,
                 )
             elif envelope.command_id == CommandCatalog.CAMERA_FRAME:
                 assert isinstance(parsed_payload, CameraFramePayload)
@@ -194,6 +203,14 @@ class CommandDispatcher:
                     q = parsed_payload.query.lower().strip()
                     apps = [a for a in apps if q in a["name"].lower()]
                 extra_data = {"apps": apps}
+            elif envelope.command_id == CommandCatalog.RUNNING_APPS_LIST:
+                assert isinstance(parsed_payload, RunningAppsListPayload)
+                apps = list_running_apps()
+                extra_data = {"apps": apps}
+            elif envelope.command_id == CommandCatalog.APP_CLOSE:
+                assert isinstance(parsed_payload, AppClosePayload)
+                close_res = close_running_app(parsed_payload.pid, parsed_payload.force)
+                extra_data = close_res
             elif envelope.command_id == CommandCatalog.OPEN_URL:
                 assert isinstance(parsed_payload, OpenUrlPayload)
                 opened = execute_open_url(parsed_payload.url)
@@ -207,6 +224,10 @@ class CommandDispatcher:
                 success_msg = f"URL abierta en el navegador: {extra_data.get('url', '')}"
             elif envelope.command_id == CommandCatalog.APPS_LIST:
                 success_msg = f"{len(extra_data.get('apps', []))} aplicaciones detectadas en el sistema."
+            elif envelope.command_id == CommandCatalog.RUNNING_APPS_LIST:
+                success_msg = f"{len(extra_data.get('apps', []))} aplicaciones activas detectadas."
+            elif envelope.command_id == CommandCatalog.APP_CLOSE:
+                success_msg = f"Aplicación PID {extra_data.get('pid')} cerrada exitosamente."
             elif envelope.command_id == CommandCatalog.MIC_AUDIO_CHUNK:
                 success_msg = "Fragmento de audio procesado."
             else:
@@ -226,6 +247,22 @@ class CommandDispatcher:
                 command_id=envelope.command_id.value,
                 message="Contraseña o PIN de Windows incorrecta.",
                 error_code="INVALID_PASSWORD"
+            )
+        except AppCloseSecurityError as e:
+            logger.warning("Intento de cerrar proceso protegido: %s", e)
+            return ExecutionResult(
+                status=ExecutionStatus.ERROR,
+                command_id=envelope.command_id.value,
+                message=str(e),
+                error_code="APP_CLOSE_FORBIDDEN"
+            )
+        except AppCloseError as e:
+            logger.error("Error al cerrar aplicación: %s", e)
+            return ExecutionResult(
+                status=ExecutionStatus.ERROR,
+                command_id=envelope.command_id.value,
+                message=str(e),
+                error_code="APP_CLOSE_FAILED"
             )
         except (MediaExecutionError, PowerExecutionError, AppLaunchError, ScreenCaptureError, CameraCaptureError, AudioStreamError, UnlockExecutionError) as e:
             logger.error("Error durante la ejecución del handler Win32: %s", e)

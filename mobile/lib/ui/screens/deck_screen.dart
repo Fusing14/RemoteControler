@@ -252,46 +252,6 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
     );
   }
 
-  void _showCustomSteamAppDialog() {
-    final textController = TextEditingController();
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF1E2230),
-        title: const Text('Lanzar Juego de Steam', style: TextStyle(color: Colors.white)),
-        content: TextField(
-          controller: textController,
-          keyboardType: TextInputType.number,
-          style: const TextStyle(color: Colors.white),
-          decoration: InputDecoration(
-            hintText: 'Steam AppID (ej: 730 para CS2)',
-            hintStyle: const TextStyle(color: Colors.white24),
-            filled: true,
-            fillColor: const Color(0xFF0F1117),
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF10B981)),
-            onPressed: () {
-              Navigator.pop(ctx);
-              final appId = int.tryParse(textController.text.trim());
-              if (appId != null && appId > 0) {
-                _sendCommand('APP_LAUNCH', {'platform': 'STEAM', 'app_id': appId});
-              }
-            },
-            child: const Text('Lanzar', style: TextStyle(color: Colors.white)),
-          ),
-        ],
-      ),
-    );
-  }
-
   void _showUnlockPcDialog() {
     final passwordController = TextEditingController();
     bool obscureText = true;
@@ -1120,48 +1080,7 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
                   ),
                 ],
               ),
-
               const SizedBox(height: 24),
-
-              // Sección Lanzamiento de Juegos Steam
-              const Text(
-                'STEAM QUICK-LAUNCH',
-                style: TextStyle(
-                  color: Color(0xFF64748B),
-                  fontSize: 11,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: 1.2,
-                ),
-              ),
-              const SizedBox(height: 12),
-              GridView.count(
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                crossAxisCount: 2,
-                mainAxisSpacing: 12,
-                crossAxisSpacing: 12,
-                childAspectRatio: 1.4,
-                children: [
-                  DeckButton(
-                    label: 'Counter-Strike 2',
-                    subtitle: 'AppID 730',
-                    icon: Icons.sports_esports_rounded,
-                    accentColor: const Color(0xFF10B981), // Esmeralda
-                    onPressed: () => _sendCommand('APP_LAUNCH', {'platform': 'STEAM', 'app_id': 730}),
-                  ),
-                  DeckButton(
-                    label: 'Otro Juego',
-                    subtitle: 'Ingresar AppID',
-                    icon: Icons.add_circle_outline_rounded,
-                    accentColor: const Color(0xFF14B8A6), // Teal
-                    onPressed: () {
-                      _showCustomSteamAppDialog();
-                      return Future.value();
-                    },
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
             ],
           ),
         ),

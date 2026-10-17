@@ -23,6 +23,8 @@ class CommandCatalog(str, Enum):
     OPEN_URL = "OPEN_URL"
     CAMERA_FRAME = "CAMERA_FRAME"
     MIC_AUDIO_CHUNK = "MIC_AUDIO_CHUNK"
+    RUNNING_APPS_LIST = "RUNNING_APPS_LIST"
+    APP_CLOSE = "APP_CLOSE"
 
 
 class MediaAction(str, Enum):
@@ -162,13 +164,19 @@ class GameLaunchPayload(BaseModel):
 
 class ScreenFramePayload(BaseModel):
     """
-    Payload para solicitud de fotograma de pantalla en vivo.
+    Payload para solicitud de fotograma de pantalla en vivo con soporte multimonitor.
     """
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     max_width: int = Field(default=1280, ge=320, le=1920)
     max_height: int = Field(default=720, ge=240, le=1080)
     quality: int = Field(default=70, ge=30, le=95)
+    monitor_index: int = Field(
+        default=1,
+        ge=0,
+        le=16,
+        description="Índice del monitor (1 para principal, 2..N para secundarios, 0 para todas las pantallas combinadas)."
+    )
 
 
 class CameraFramePayload(BaseModel):
@@ -285,6 +293,23 @@ class MicAudioChunkPayload(BaseModel):
     )
 
 
+class RunningAppsListPayload(BaseModel):
+    """
+    Payload para consultar las aplicaciones activas en Windows con ventanas visibles.
+    """
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class AppClosePayload(BaseModel):
+    """
+    Payload para cerrar una aplicación activa en Windows por su PID.
+    """
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    pid: int = Field(..., gt=0, description="Process ID (PID) de la aplicación a cerrar.")
+    force: bool = Field(default=False, description="True para forzar el cierre inmediato (SIGKILL/TerminateProcess).")
+
+
 CommandPayloadType = Union[
     MediaPayload,
     PowerPayload,
@@ -297,6 +322,8 @@ CommandPayloadType = Union[
     UnlockPcPayload,
     AppsListPayload,
     OpenUrlPayload,
+    RunningAppsListPayload,
+    AppClosePayload,
 ]
 
 COMMAND_PAYLOAD_SCHEMA_MAP: Dict[CommandCatalog, type[BaseModel]] = {
@@ -311,6 +338,8 @@ COMMAND_PAYLOAD_SCHEMA_MAP: Dict[CommandCatalog, type[BaseModel]] = {
     CommandCatalog.UNLOCK_PC: UnlockPcPayload,
     CommandCatalog.APPS_LIST: AppsListPayload,
     CommandCatalog.OPEN_URL: OpenUrlPayload,
+    CommandCatalog.RUNNING_APPS_LIST: RunningAppsListPayload,
+    CommandCatalog.APP_CLOSE: AppClosePayload,
 }
 
 
