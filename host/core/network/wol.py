@@ -240,13 +240,29 @@ def get_broadcast_ip() -> str:
 
 
 def send_magic_packet(mac_address: str, broadcast_ip: str = "255.255.255.255", port: int = 9) -> bool:
-    """Envía un paquete mágico Wake-on-LAN por difusión UDP."""
+    """
+    Envía un paquete mágico Wake-on-LAN por difusión UDP.
+    Difunde a broadcast_ip y a 255.255.255.255 en puertos 9 y 7,
+    realizando dos transmisiones separadas por 100ms para asegurar el encendido en frío.
+    """
     try:
         packet = build_magic_packet(mac_address)
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+
+        targets = {broadcast_ip, "255.255.255.255"}
+        ports = {port, 7} if port == 9 else {port}
+
         try:
-            sock.sendto(packet, (broadcast_ip, port))
+            for attempt in range(2):
+                for p in ports:
+                    for target in targets:
+                        try:
+                            sock.sendto(packet, (target, p))
+                        except Exception:
+                            pass
+                if attempt == 0:
+                    time.sleep(0.1)
             return True
         finally:
             sock.close()

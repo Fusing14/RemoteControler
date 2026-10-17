@@ -516,7 +516,7 @@ class _AppsScreenState extends State<AppsScreen> {
   Widget _buildRunningTab() {
     final filtered = _filteredRunningApps;
     final primaryApps =
-        filtered.where((a) => a['category'] != 'background').toList();
+        filtered.where((a) => a['category'] == 'primary').toList();
     final backgroundApps =
         filtered.where((a) => a['category'] == 'background').toList();
 
@@ -561,7 +561,7 @@ class _AppsScreenState extends State<AppsScreen> {
                   borderRadius: BorderRadius.circular(6),
                 ),
                 child: Text(
-                  'Ventanas: ${primaryApps.length}',
+                  'Apps en Primer Plano: ${primaryApps.length}',
                   style: const TextStyle(
                     color: Color(0xFF10B981),
                     fontSize: 12,

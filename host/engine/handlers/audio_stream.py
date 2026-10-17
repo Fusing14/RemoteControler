@@ -80,9 +80,36 @@ class AudioPlayerWorker:
     def _worker_loop(self) -> None:
         while self._is_running:
             try:
-                wav_data = self._queue.get(timeout=0.5)
+                first_item = self._queue.get(timeout=0.5)
             except queue.Empty:
                 continue
+
+            raw_pcm, sample_rate, channels = first_item
+            accumulated = [raw_pcm]
+
+            # Drenar paquetes inmediatamente contiguos en cola para concatenarlos
+            # y reproducirlos en un único bloque continuo, reduciendo drásticamente
+            # las aperturas del dispositivo de sonido y eliminando chasquidos entre fragmentos.
+            while not self._queue.empty() and len(accumulated) < 4:
+                try:
+                    next_pcm, next_rate, next_ch = self._queue.get_nowait()
+                    if next_rate == sample_rate and next_ch == channels:
+                        accumulated.append(next_pcm)
+                        self._queue.task_done()
+                    else:
+                        self._queue.put_nowait((next_pcm, next_rate, next_ch))
+                        break
+                except (queue.Empty, queue.Full):
+                    break
+
+            combined_pcm = b"".join(accumulated)
+            header = _create_wav_header(
+                pcm_length=len(combined_pcm),
+                sample_rate=sample_rate,
+                channels=channels,
+                bits_per_sample=16,
+            )
+            wav_data = header + combined_pcm
 
             try:
                 if sys.platform == "win32":
@@ -103,26 +130,18 @@ class AudioPlayerWorker:
         if not raw_pcm:
             return
 
-        # Si hay más de 10 paquetes en cola, descartar los más antiguos para preservar tiempo real
-        while self._queue.qsize() > 10:
+        # Si hay más de 12 paquetes en cola, descartar los más antiguos para preservar baja latencia
+        while self._queue.qsize() > 12:
             try:
                 self._queue.get_nowait()
                 self._queue.task_done()
             except queue.Empty:
                 break
 
-        header = _create_wav_header(
-            pcm_length=len(raw_pcm),
-            sample_rate=sample_rate,
-            channels=channels,
-            bits_per_sample=16,
-        )
-        wav_buffer = header + raw_pcm
-
         try:
-            self._queue.put_nowait(wav_buffer)
+            self._queue.put_nowait((raw_pcm, sample_rate, channels))
         except queue.Full:
-            pass  # Descartar si la cola sigue llena para no bloquear el hilo de red
+            pass  # Descartar si la cola sigue saturada para no bloquear la red
 
 
 def play_audio_chunk(

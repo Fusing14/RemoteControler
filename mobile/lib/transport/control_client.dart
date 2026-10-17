@@ -67,7 +67,12 @@ class RemoteControlClient {
 
   /// Valida que el hostEndpoint apunte exclusivamente a la red Tailscale o localhost en modo dev.
   void _validateEndpoint(String endpoint) {
-    final clean = endpoint.trim().replaceAll('http://', '').replaceAll('https://', '').replaceAll('ws://', '').replaceAll('wss://', '');
+    final clean = endpoint
+        .trim()
+        .replaceAll('http://', '')
+        .replaceAll('https://', '')
+        .replaceAll('ws://', '')
+        .replaceAll('wss://', '');
     final parts = clean.split(':');
     final ip = parts[0];
 
@@ -125,7 +130,8 @@ class RemoteControlClient {
   /// Reconecta de inmediato si la sesión no está conectada o se perdió por cambio de ciclo de vida.
   Future<void> ensureConnected() async {
     if (_isDisposed) return;
-    if (_state == DeckConnectionState.connected || _state == DeckConnectionState.connecting) {
+    if (_state == DeckConnectionState.connected ||
+        _state == DeckConnectionState.connecting) {
       return;
     }
     _reconnectTimer?.cancel();
@@ -137,7 +143,14 @@ class RemoteControlClient {
     try {
       final jsonMap = json.decode(data as String) as Map<String, dynamic>;
 
-      if (_activeCommandCompleter != null && !_activeCommandCompleter!.isCompleted) {
+      // Los paquetes de streaming (como chunks de audio) no deben resolver completers de otros comandos
+      final cmdId = jsonMap['command_id'] as String?;
+      if (cmdId == 'MIC_AUDIO_CHUNK') {
+        return;
+      }
+
+      if (_activeCommandCompleter != null &&
+          !_activeCommandCompleter!.isCompleted) {
         _activeCommandCompleter!.complete(jsonMap);
         _activeCommandCompleter = null;
       }
@@ -162,9 +175,11 @@ class RemoteControlClient {
     _subscription = null;
     _channel = null;
 
-    if (_activeCommandCompleter != null && !_activeCommandCompleter!.isCompleted) {
+    if (_activeCommandCompleter != null &&
+        !_activeCommandCompleter!.isCompleted) {
       _activeCommandCompleter!.completeError(
-        const NetworkConnectionException('Conexión cerrada durante la espera de respuesta.'),
+        const NetworkConnectionException(
+            'Conexión cerrada durante la espera de respuesta.'),
       );
       _activeCommandCompleter = null;
     }
@@ -202,11 +217,14 @@ class RemoteControlClient {
     Duration timeout = const Duration(seconds: 5),
   }) async {
     if (_state != DeckConnectionState.connected || _channel == null) {
-      throw const NetworkConnectionException('No hay conexión activa con el Host.');
+      throw const NetworkConnectionException(
+          'No hay conexión activa con el Host.');
     }
 
-    if (_activeCommandCompleter != null && !_activeCommandCompleter!.isCompleted) {
-      throw const NetworkConnectionException('Ya hay una petición en tránsito.');
+    if (_activeCommandCompleter != null &&
+        !_activeCommandCompleter!.isCompleted) {
+      throw const NetworkConnectionException(
+          'Ya hay una petición en tránsito.');
     }
 
     final envelopeJson = await envelopeBuilder.buildSignedEnvelopeJson(
@@ -225,9 +243,31 @@ class RemoteControlClient {
         if (_activeCommandCompleter == completer) {
           _activeCommandCompleter = null;
         }
-        throw const NetworkConnectionException('Timeout esperando respuesta del Host.');
+        throw const NetworkConnectionException(
+            'Timeout esperando respuesta del Host.');
       },
     );
+  }
+
+  /// Transmite paquetes de streaming continuo (ej. fragmentos de audio de micrófono PCM)
+  /// en modo 'fire-and-forget' sin bloquear _activeCommandCompleter ni requerir confirmación síncrona.
+  Future<void> sendStreamPacket({
+    required String commandId,
+    required Map<String, dynamic> payload,
+  }) async {
+    if (_state != DeckConnectionState.connected || _channel == null) {
+      return;
+    }
+
+    try {
+      final envelopeJson = await envelopeBuilder.buildSignedEnvelopeJson(
+        commandId: commandId,
+        payload: payload,
+      );
+      _channel?.sink.add(envelopeJson);
+    } catch (_) {
+      // Ignorar caídas de paquetes individuales en streaming para evitar cortes de audio
+    }
   }
 
   void _setState(DeckConnectionState newState) {

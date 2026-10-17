@@ -134,11 +134,14 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
               _controlClient != null &&
               chunk is String &&
               chunk.isNotEmpty) {
-            _sendCommand('MIC_AUDIO_CHUNK', {
-              'audio_b64': chunk,
-              'sample_rate': 16000,
-              'channels': 1,
-            });
+            _controlClient?.sendStreamPacket(
+              commandId: 'MIC_AUDIO_CHUNK',
+              payload: {
+                'audio_b64': chunk,
+                'sample_rate': 16000,
+                'channels': 1,
+              },
+            );
           }
         },
         onError: (err) {
@@ -602,7 +605,11 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
     }
 
     try {
-      await WolService.wake(macAddress: mac, broadcastIp: bcast);
+      await WolService.wake(
+        macAddress: mac,
+        broadcastIp: bcast,
+        hostIpOrEndpoint: widget.hostEndpoint,
+      );
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(

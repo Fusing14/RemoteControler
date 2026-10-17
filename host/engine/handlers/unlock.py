@@ -291,8 +291,8 @@ def execute_unlock_pc(password_or_pin: str, username: Optional[str] = None) -> N
             user32.keybd_event(VK_SPACE, sc_space, 0, 0)
             user32.keybd_event(VK_SPACE, sc_space, KEYEVENTF_KEYUP, 0)
 
-            # Esperar a que la cortina suba completamente (900ms en Windows 11/10)
-            time.sleep(0.9)
+            # Esperar a que la cortina suba completamente y el campo de PIN adquiera foco (950ms en Windows 11/10)
+            time.sleep(0.95)
 
             # Inyectar caracteres de credencial usando scan codes de hardware
             for ch in password_or_pin:

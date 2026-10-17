@@ -198,7 +198,7 @@ def create_app(
                     }))
                     continue
 
-                if not rate_limiter.check_rate_limit(dev_id):
+                if envelope.command_id != CommandCatalog.MIC_AUDIO_CHUNK and not rate_limiter.check_rate_limit(dev_id):
                     await websocket.send_text(json.dumps({
                         "status": ExecutionStatus.REJECTED.value,
                         "message": "Tasa máxima por dispositivo excedida.",

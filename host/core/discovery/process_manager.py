@@ -66,6 +66,14 @@ TH32CS_SNAPPROCESS = 0x00000002
 
 
 if sys.platform == "win32":
+    class RECT(ctypes.Structure):
+        _fields_ = [
+            ("left", wintypes.LONG),
+            ("top", wintypes.LONG),
+            ("right", wintypes.LONG),
+            ("bottom", wintypes.LONG),
+        ]
+
     class PROCESSENTRY32(ctypes.Structure):
         _fields_ = [
             ("dwSize", wintypes.DWORD),
@@ -80,6 +88,7 @@ if sys.platform == "win32":
             ("szExeFile", ctypes.c_wchar * 260),
         ]
 else:
+    RECT = None  # type: ignore
     PROCESSENTRY32 = None  # type: ignore
 
 
@@ -107,7 +116,8 @@ def get_process_name_by_pid(pid: int) -> str:
 def list_running_apps() -> List[Dict[str, Any]]:
     """
     Enumera las aplicaciones en ejecución clasificadas en:
-    1. 'primary': Ventanas principales interactivas en la barra de tareas (GW_OWNER == 0, visibles, no-cloaked).
+    1. 'primary': Ventanas principales interactivas en la barra de tareas (GW_OWNER == 0, visibles, no-cloaked, dimensiones válidas).
+       Deduplicadas estrictamente por nombre de ejecutable para mostrar una única entrada representativa por aplicación.
        Ordena la ventana en primer plano (GetForegroundWindow) en primer lugar.
     2. 'background': Procesos secundarios de usuario en la misma sesión de Windows (sin ventana interactiva de barra de tareas).
     """
@@ -147,8 +157,13 @@ def list_running_apps() -> List[Dict[str, Any]]:
             if not title:
                 return True
 
-            # Filtrar títulos internos
-            if title.lower() in IGNORED_WINDOW_TITLES:
+            lower_title = title.lower()
+
+            # Filtrar títulos internos y overlays
+            if lower_title in IGNORED_WINDOW_TITLES:
+                return True
+
+            if "overlay" in lower_title or "remotecontroler" in lower_title:
                 return True
 
             # Filtrar ventanas UWP 'cloaked' (suspendidas/ocultas en Windows 10/11)
@@ -158,12 +173,15 @@ def list_running_apps() -> List[Dict[str, Any]]:
             if cloaked.value != 0:
                 return True
 
-            # Filtrar tooltips o barras de herramientas flotantes que no sean ventanas de app
+            # Filtrar tooltips, barras flotantes y overlays transparentes
             GWL_EXSTYLE = -20
             WS_EX_TOOLWINDOW = 0x00000080
             WS_EX_APPWINDOW = 0x00040000
+            WS_EX_TRANSPARENT = 0x00000020
             ex_style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
             if (ex_style & WS_EX_TOOLWINDOW) and not (ex_style & WS_EX_APPWINDOW):
+                return True
+            if ex_style & WS_EX_TRANSPARENT:
                 return True
 
             # Comprobar ventana propietaria (GW_OWNER = 4)
@@ -173,17 +191,29 @@ def list_running_apps() -> List[Dict[str, Any]]:
                 # Es una ventana modal o popup secundario, no la ventana principal de la barra de tareas
                 return True
 
+            # Comprobar dimensiones mínimas de ventana (> 50x50 píxeles para ignorar elementos invisibles/ocultos)
+            rect = RECT()
+            if user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+                width = rect.right - rect.left
+                height = rect.bottom - rect.top
+                if width <= 50 or height <= 50:
+                    return True
+
             pid = wintypes.DWORD()
             user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-            if pid.value <= 4:
+            if pid.value <= 4 or pid.value == os.getpid():
                 return True
 
             name = get_process_name_by_pid(pid.value)
-            if name.lower() in IGNORED_WINDOW_NAMES:
+            if not name or name == "Unknown":
+                return True
+
+            lower_name = name.lower()
+            if lower_name in IGNORED_WINDOW_NAMES or lower_name in PROTECTED_PROCESS_NAMES:
                 return True
 
             # Ignorar el explorador de Windows si solo tiene el Program Manager
-            if name.lower() == "explorer.exe" and title in ("Program Manager", ""):
+            if lower_name == "explorer.exe" and title in ("Program Manager", ""):
                 return True
 
             is_fg = bool(hwnd == fg_hwnd)
@@ -208,20 +238,25 @@ def list_running_apps() -> List[Dict[str, Any]]:
     else:
         user32.EnumWindows(cb_func, 0)
 
-    # Deduplicar por PID manteniendo la ventana en primer plano o la más descriptiva
-    by_pid: Dict[int, Dict[str, Any]] = {}
+    # Deduplicar estrictamente por nombre de ejecutable (name.lower())
+    # manteniendo la ventana en primer plano o la que tenga el título más descriptivo
+    by_name: Dict[str, Dict[str, Any]] = {}
     for app in raw_apps:
-        pid = app["pid"]
-        if pid not in by_pid:
-            by_pid[pid] = app
+        key = app["name"].lower()
+        if key not in by_name:
+            by_name[key] = app
         else:
-            if app.get("is_foreground") or len(app["title"]) > len(by_pid[pid]["title"]):
-                by_pid[pid] = app
+            if app.get("is_foreground") or (
+                not by_name[key].get("is_foreground")
+                and len(app["title"]) > len(by_name[key]["title"])
+            ):
+                by_name[key] = app
 
-    primary_apps = list(by_pid.values())
+    primary_apps = list(by_name.values())
     # Ordenar: primero la ventana en primer plano si existe, luego orden alfabético
     primary_apps.sort(key=lambda a: (not a.get("is_foreground", False), a["name"].lower()))
-    primary_pids = set(by_pid.keys())
+    primary_pids = set(a["pid"] for a in primary_apps)
+    primary_names = set(by_name.keys())
 
     # Enumerar procesos en segundo plano de la sesión de usuario
     background_apps: List[Dict[str, Any]] = []
@@ -246,6 +281,7 @@ def list_running_apps() -> List[Dict[str, Any]]:
                         and lower_name not in PROTECTED_PROCESS_NAMES
                         and lower_name not in IGNORED_WINDOW_NAMES
                         and p_id not in primary_pids
+                        and lower_name not in primary_names
                     ):
                         proc_sid = wintypes.DWORD()
                         if kernel32.ProcessIdToSessionId(p_id, ctypes.byref(proc_sid)):
@@ -264,6 +300,12 @@ def list_running_apps() -> List[Dict[str, Any]]:
         finally:
             kernel32.CloseHandle(h_snap)
 
+    by_bg_name: Dict[str, Dict[str, Any]] = {}
+    for bg_app in background_apps:
+        k = bg_app["name"].lower()
+        if k not in by_bg_name:
+            by_bg_name[k] = bg_app
+    background_apps = list(by_bg_name.values())
     background_apps.sort(key=lambda a: a["name"].lower())
     return primary_apps + background_apps
 

@@ -30,10 +30,12 @@ class WolService {
   }
 
   /// Envía el paquete mágico Wake-on-LAN por difusión UDP en los puertos 9 y 7.
-  /// Difunde a 255.255.255.255 y a la IP de difusión de la subred local si se suministra.
+  /// Difunde a 255.255.255.255, a la IP de difusión de la subred local (/24 calculada o explícita).
+  /// Realiza un reintento tras 100ms para asegurar la recepción en adaptadores en reposo.
   static Future<void> wake({
     required String macAddress,
     String? broadcastIp,
+    String? hostIpOrEndpoint,
   }) async {
     final packet = buildMagicPacket(macAddress);
     final socket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
@@ -52,11 +54,31 @@ class WolService {
       } catch (_) {}
     }
 
+    if (hostIpOrEndpoint != null && hostIpOrEndpoint.trim().isNotEmpty) {
+      try {
+        final clean =
+            hostIpOrEndpoint.trim().replaceAll(RegExp(r'^https?://'), '');
+        final hostPart = clean.split(':').first;
+        final parts = hostPart.split('.');
+        if (parts.length == 4 && !hostPart.startsWith('127.')) {
+          final subnetBcast = '${parts[0]}.${parts[1]}.${parts[2]}.255';
+          targets.add(InternetAddress(subnetBcast));
+        }
+      } catch (_) {}
+    }
+
     try {
-      // Enviar por puertos 9 y 7 (puertos estándar de Wake-on-LAN)
-      for (final port in const [9, 7]) {
-        for (final target in targets) {
-          socket.send(packet, target, port);
+      // Transmitir en dos ráfagas consecutivas separadas por 100ms para despertar NICs en ahorro de energía
+      for (var attempt = 0; attempt < 2; attempt++) {
+        for (final port in const [9, 7]) {
+          for (final target in targets) {
+            try {
+              socket.send(packet, target, port);
+            } catch (_) {}
+          }
+        }
+        if (attempt == 0) {
+          await Future.delayed(const Duration(milliseconds: 100));
         }
       }
     } finally {

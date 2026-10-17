@@ -762,7 +762,7 @@ def test_host_info_command(test_setup):
 
 
 def test_running_apps_categorization():
-    """Valida la clasificación de procesos en primary y background."""
+    """Valida la clasificación de procesos en primary y background y deduplicación estricta."""
     apps = list_running_apps()
     assert isinstance(apps, list)
     assert len(apps) > 0
@@ -771,6 +771,11 @@ def test_running_apps_categorization():
     assert categories.issubset({"primary", "background"})
     assert "primary" in categories
 
+    # Verificar deduplicación estricta por nombre en apps principales
+    primary_apps = [a for a in apps if a.get("category") == "primary"]
+    primary_names = [a["name"].lower() for a in primary_apps]
+    assert len(primary_names) == len(set(primary_names)), "No deben existir nombres de ejecutable duplicados en primary"
+
     for app in apps:
         assert "pid" in app
         assert "name" in app
@@ -778,6 +783,28 @@ def test_running_apps_categorization():
         assert "category" in app
         assert app["pid"] > 0
         assert isinstance(app["name"], str)
+        if app.get("category") == "primary":
+            assert "overlay" not in app["title"].lower()
+
+
+def test_wol_send_magic_packet_dual_burst(monkeypatch):
+    """Valida que send_magic_packet transmita dos ráfagas multi-puerto y multi-destino."""
+    from host.core.network.wol import send_magic_packet
+    mock_sock = MagicMock()
+    monkeypatch.setattr("socket.socket", lambda *args, **kwargs: mock_sock)
+
+    with patch("time.sleep") as mock_sleep:
+        success = send_magic_packet("30:56:0F:23:15:2C", broadcast_ip="192.168.1.255", port=9)
+        assert success is True
+        # Debe haber llamado a sleep(0.1) entre ráfagas
+        mock_sleep.assert_called_with(0.1)
+
+    # Debe haber enviado paquetes a (192.168.1.255, 9), (255.255.255.255, 9),
+    # y también al puerto 7 en ambas ráfagas (2 ráfagas * 2 destinos * 2 puertos = 8 llamadas sendto)
+    assert mock_sock.sendto.call_count >= 4
+    sent_destinations = [call[0][1] for call in mock_sock.sendto.call_args_list]
+    assert ("192.168.1.255", 9) in sent_destinations
+    assert ("255.255.255.255", 9) in sent_destinations
 
 
 def test_unlock_elevation_and_session_helpers():
