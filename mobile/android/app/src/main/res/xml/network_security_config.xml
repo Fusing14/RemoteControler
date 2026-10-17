@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- Tráfico en texto plano desactivado globalmente por política Zero-Trust -->
+    <base-config cleartextTrafficPermitted="false" />
+
+    <!-- Excepción controlada: Permitida exclusivamente para el rango CGNAT de Tailscale y loopback -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">127.0.0.1</domain>
+        <domain includeSubdomains="true">localhost</domain>
+        <!-- Rango CGNAT de Tailscale (RFC 6598) ya cifrado por el túnel WireGuard de capa 3 -->
+        <domain includeSubdomains="true">100.64.0.0</domain>
+    </domain-config>
+</network-security-config>
