@@ -65,6 +65,7 @@ def cmd_pair(args):
     print(f"[*] Endpoint       : {challenge.tailscale_endpoint}")
     print(f"[*] Token Efímero  : {challenge.pairing_token}")
     print(f"[*] Válido por     : {args.ttl} segundos (Token de un solo uso)")
+    print(f"[*] Estado Vault   : Guardado seguro en disco ('{pairing_mgr.challenge_path.name}')")
     print("=" * 65)
     print("\nEscanea el siguiente código QR desde la App Móvil de RemoteControler:\n")
 
@@ -175,7 +176,7 @@ def main():
     p_pair = subparsers.add_parser("pair", help="Genera código QR efímero para emparejar cliente móvil")
     p_pair.add_argument("--endpoint", type=str, default=None, help="Endpoint host:puerto a publicitar")
     p_pair.add_argument("--port", type=int, default=8443, help="Puerto a publicitar si no se pasa --endpoint")
-    p_pair.add_argument("--ttl", type=int, default=180, help="TTL del token de emparejamiento en segundos (default: 180)")
+    p_pair.add_argument("--ttl", type=int, default=300, help="TTL del token de emparejamiento en segundos (default: 300)")
     p_pair.add_argument("--dev", action="store_true", help="Permite endpoint en localhost para pruebas locales")
 
     # Subcomando verify-audit

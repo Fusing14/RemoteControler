@@ -199,6 +199,44 @@ def test_http_pair_endpoint_flow(server_environment):
     assert store.is_device_trusted(new_device_id)
 
 
+def test_http_pair_multi_process_flow(server_environment):
+    """
+    Verifica que el servidor en ejecución ('run') puede aceptar y validar un token
+    emitido por una instancia completamente separada ('pair' CLI) vía vault en disco.
+    """
+    app = server_environment["app"]
+    store = server_environment["store"]
+    client = TestClient(app)
+
+    # Simular proceso CLI independiente 'python -m host.main pair'
+    cli_store = TrustedDeviceStore(vault_dir=store.vault_dir)
+    cli_pairing_mgr = PairingManager(device_store=cli_store, default_ttl_seconds=300)
+    cli_challenge = cli_pairing_mgr.create_pairing_challenge(tailscale_endpoint="100.73.194.76:8443", ttl_seconds=300)
+
+    # Identidad del teléfono que escanea el QR
+    phone_priv, phone_pub = generate_ed25519_keypair()
+    phone_pub_bytes = public_key_to_raw_bytes(phone_pub)
+    phone_device_id = compute_device_id(phone_pub_bytes)
+
+    # El teléfono hace POST /pair al servidor daemon (que no tenía este token en su memoria RAM original)
+    req = {
+        "pairing_token": cli_challenge.pairing_token,
+        "client_public_key_hex": phone_pub_bytes.hex(),
+        "client_device_id": phone_device_id,
+        "label": "OnePlus 12 de Marco"
+    }
+    response = client.post("/pair", json=req)
+    assert response.status_code == 200
+    assert response.json()["status"] == "SUCCESS"
+    assert store.is_device_trusted(phone_device_id)
+
+    # Replay attempt debe fallar de inmediato
+    replay_resp = client.post("/pair", json=req)
+    assert replay_resp.status_code == 401
+    assert "Token de emparejamiento inválido o expirado" in replay_resp.json()["detail"]
+
+
+
 @patch("host.engine.handlers.media.send_virtual_key")
 def test_websocket_control_successful_command(mock_send_vk, server_environment):
     """Verifica intercambio de comando exitoso a través del WebSocket /ws/control."""

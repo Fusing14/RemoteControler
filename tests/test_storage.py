@@ -163,3 +163,41 @@ def test_pairing_challenge_expiration(tmp_path: Path):
     # Simular tiempo futuro mayor al TTL (15 segundos después)
     future_time = time.time() + 15
     assert pairing_mgr.verify_and_consume_token(token, current_time=future_time) is False
+
+
+def test_pairing_challenge_inter_process_persistence(tmp_path: Path):
+    """
+    Prueba 7: Simulación inter-proceso entre 'host.main pair' (CLI) y 'host.main run' (Daemon).
+    Verifica que una instancia separada de PairingManager puede leer, validar y consumir
+    el desafío persistido en disco con DPAPI.
+    """
+    vault_dir = tmp_path / "ipc_pairing_vault"
+    
+    # Proceso 1 ('pair'): genera el QR y persiste en disco
+    store_pair_cli = TrustedDeviceStore(vault_dir=vault_dir)
+    mgr_pair_cli = PairingManager(device_store=store_pair_cli, default_ttl_seconds=300)
+    challenge = mgr_pair_cli.create_pairing_challenge(tailscale_endpoint="100.73.194.76:8443", ttl_seconds=300)
+    token = challenge.pairing_token
+
+    # Comprobar que el archivo cifrado existe en disco
+    assert mgr_pair_cli.challenge_path.exists()
+
+    # Proceso 2 ('run'): daemon separado que recibe POST /pair
+    store_daemon = TrustedDeviceStore(vault_dir=vault_dir)
+    mgr_daemon = PairingManager(device_store=store_daemon)
+
+    # 1. Intento con token erróneo debe fallar
+    assert mgr_daemon.verify_and_consume_token("bad_token_12345") is False
+    assert "no coincide" in mgr_daemon.last_rejection_reason
+
+    # 2. Intento con el token legítimo emitido por el proceso 1
+    assert mgr_daemon.verify_and_consume_token(token) is True
+    assert mgr_daemon.last_rejection_reason is None
+
+    # 3. Tras el consumo, el archivo en disco debe haber sido eliminado
+    assert not mgr_daemon.challenge_path.exists()
+
+    # 4. Segundo intento debe ser rechazado como Replay / Ya consumido
+    assert mgr_daemon.verify_and_consume_token(token) is False
+    assert "No hay ningún desafío" in mgr_daemon.last_rejection_reason
+

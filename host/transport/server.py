@@ -54,7 +54,16 @@ def create_app(
         Canjea un token de emparejamiento efímero para registrar la clave pública del móvil.
         """
         client_ip = request.client.host if request.client else "UNKNOWN"
+        logger.info(
+            "Recibida petición POST /pair desde %s para dispositivo '%s' (Device ID: %s...)",
+            client_ip, body.label, body.client_device_id[:12]
+        )
+
         if not is_allowed_source_ip(client_ip, allow_loopback=allow_loopback):
+            logger.warning(
+                "Petición POST /pair rechazada: IP de origen '%s' fuera del rango permitido Tailscale (100.64.0.0/10).",
+                client_ip
+            )
             audit_logger.log_event(
                 event_type="PAIR_ATTEMPT",
                 result_status="NETWORK_FORBIDDEN",
@@ -64,20 +73,27 @@ def create_app(
 
         # Rate limiter check por IP
         if not rate_limiter.check_rate_limit(client_ip):
+            logger.warning("Petición POST /pair rechazada: Rate limit excedido para IP %s", client_ip)
             raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Tasa de peticiones excedida.")
 
         # Verificar y consumir token de un solo uso
         is_token_valid = pairing_manager.verify_and_consume_token(body.pairing_token)
         if not is_token_valid:
+            reason = pairing_manager.last_rejection_reason or "Token de emparejamiento inválido o expirado"
+            logger.warning(
+                "Petición POST /pair RECHAZADA para IP %s ('%s'): %s",
+                client_ip, body.label, reason
+            )
             rate_limiter.record_failure(client_ip)
             audit_logger.log_event(
                 event_type="PAIR_ATTEMPT",
                 result_status="INVALID_OR_EXPIRED_TOKEN",
-                client_ip=client_ip
+                client_ip=client_ip,
+                details={"reason": reason}
             )
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Token de emparejamiento inválido o expirado."
+                detail=f"Token de emparejamiento inválido o expirado: {reason}"
             )
 
         try:
@@ -88,6 +104,10 @@ def create_app(
                 label=body.label
             )
             rate_limiter.record_success(client_ip)
+            logger.info(
+                "¡ÉXITO! Dispositivo '%s' (%s) registrado y emparejado correctamente desde %s",
+                body.label, body.client_device_id, client_ip
+            )
             audit_logger.log_event(
                 event_type="PAIR_SUCCESS",
                 result_status="REGISTERED",
@@ -101,7 +121,7 @@ def create_app(
                 "host_device_id": device_store.get_host_device_id()
             }
         except Exception as e:
-            logger.error("Error al registrar dispositivo: %s", e)
+            logger.error("Error al registrar dispositivo '%s': %s", body.label, e)
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
     @app.websocket("/ws/control")
