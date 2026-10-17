@@ -17,14 +17,24 @@ tasks.register("clean", Delete) {
     delete rootProject.buildDir
 }
 
-subprojects {
-    afterEvaluate { project ->
+subprojects { project ->
+    def configureNamespace = {
         if (project.hasProperty("android")) {
-            project.android {
-                if (namespace == null) {
-                    namespace project.group ?: "com.example.${project.name}"
+            if (project.android.namespace == null) {
+                if (project.name == "ota_update") {
+                    project.android.namespace = "eu.wroblewscy.marcin.ota_update"
+                } else {
+                    project.android.namespace = project.group ?: "com.example.${project.name}"
                 }
             }
+        }
+    }
+
+    if (project.state.executed) {
+        configureNamespace()
+    } else {
+        project.afterEvaluate {
+            configureNamespace()
         }
     }
 }
