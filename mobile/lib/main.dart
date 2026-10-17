@@ -1,0 +1,76 @@
+import 'package:flutter/material.dart';
+
+import 'crypto/key_manager.dart';
+import 'services/pairing_client.dart';
+import 'ui/screens/scanner_screen.dart';
+import 'ui/screens/deck_screen.dart';
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  // 1. Inicialización de la identidad criptográfica respaldada por Hardware Keystore / Keychain
+  // Nota: FlutterHardwareStorageAdapter utiliza flutter_secure_storage cuando corre en dispositivo
+  final storage = MemorySecureStorageAdapter(); // Fallback en memoria / desarrollo
+  final keyManager = KeyManager(storage: storage);
+  await keyManager.initialize();
+
+  // 2. Comprobar si ya existe un Host previamente vinculado
+  final pairingClient = PairingClient(
+    keyManager: keyManager,
+    storage: storage,
+  );
+
+  final pairedEndpoint = await pairingClient.getPairedEndpoint();
+
+  runApp(SecureDeckApp(
+    keyManager: keyManager,
+    pairingClient: pairingClient,
+    initialEndpoint: pairedEndpoint,
+  ));
+}
+
+/// Aplicación principal configurada con estética Stream Deck Dark Mode de alto contraste.
+class SecureDeckApp extends StatelessWidget {
+  final KeyManager keyManager;
+  final PairingClient pairingClient;
+  final String? initialEndpoint;
+
+  const SecureDeckApp({
+    super.key,
+    required this.keyManager,
+    required this.pairingClient,
+    this.initialEndpoint,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'SecureDeck',
+      debugShowCheckedModeBanner: false,
+      theme: ThemeData(
+        brightness: Brightness.dark,
+        scaffoldBackgroundColor: const Color(0xFF090A0F),
+        primaryColor: const Color(0xFF6366F1),
+        colorScheme: const ColorScheme.dark(
+          primary: Color(0xFF6366F1),
+          secondary: Color(0xFF10B981),
+          surface: Color(0xFF11141C),
+          background: Color(0xFF090A0F),
+        ),
+        appBarTheme: const AppBarTheme(
+          backgroundColor: Color(0xFF11141C),
+          elevation: 0,
+        ),
+      ),
+      home: initialEndpoint != null
+          ? DeckScreen(
+              hostEndpoint: initialEndpoint!,
+              pairingClient: pairingClient,
+              keyManager: keyManager,
+            )
+          : ScannerScreen(
+              pairingClient: pairingClient,
+            ),
+    );
+  }
+}

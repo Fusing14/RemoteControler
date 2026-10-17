@@ -3,7 +3,7 @@
 
 [![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-blue.svg?logo=python&logoColor=white)](https://www.python.org/)
 [![Dart SDK 3.13+](https://img.shields.io/badge/Dart-3.13%2B-0175C2.svg?logo=dart&logoColor=white)](https://dart.dev/)
-[![Tests](https://img.shields.io/badge/Tests-54%2F54%20Passing%20(100%25)-success.svg?logo=pytest&logoColor=white)](#testing--verification)
+[![Tests](https://img.shields.io/badge/Tests-58%2F58%20Passing%20(100%25)-success.svg?logo=pytest&logoColor=white)](#testing--verification)
 [![Architecture](https://img.shields.io/badge/Architecture-Zero--Trust%20%7C%20Defense--in--Depth-red.svg)](#threat-model--mitigations-stride)
 [![Network](https://img.shields.io/badge/Network-Tailscale%20WireGuard%20Mesh%20Only-blueviolet.svg?logo=tailscale&logoColor=white)](https://tailscale.com/)
 [![OS](https://img.shields.io/badge/OS-Windows%2011%20Native%20Win32-0078D4.svg?logo=windows11&logoColor=white)](https://microsoft.com/windows)
