@@ -12,3 +12,11 @@
 -keep class com.it_nomads.fluttersecurestorage.** { *; }
 -keep class dev.steenbakker.mobile_scanner.** { *; }
 -dontwarn javax.annotation.**
+
+# Flutter Play Store Deferred Components (R8 missing classes suppression)
+-dontwarn com.google.android.play.core.**
+-dontwarn io.flutter.embedding.engine.deferredcomponents.**
+-keep class com.google.android.play.core.** { *; }
+
+# Flutter wrappers and plugins
+-dontwarn io.flutter.app.**
