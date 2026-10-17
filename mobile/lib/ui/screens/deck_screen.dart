@@ -28,7 +28,7 @@ class DeckScreen extends StatefulWidget {
 }
 
 class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
-  late final RemoteControlClient _controlClient;
+  RemoteControlClient? _controlClient;
   StreamSubscription<DeckConnectionState>? _stateSubscription;
   DeckConnectionState _connectionState = DeckConnectionState.disconnected;
 
@@ -36,31 +36,43 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _initControlClient();
+  }
 
-    // Inicializar cliente WebSocket
-    final km = widget.keyManager ?? KeyManager(storage: MemorySecureStorageAdapter());
+  Future<void> _initControlClient() async {
+    final km = widget.keyManager ?? widget.pairingClient.keyManager;
+    await km.ensureInitialized();
+
     final builder = EnvelopeBuilder(keyManager: km);
 
-    _controlClient = RemoteControlClient(
+    final client = RemoteControlClient(
       hostEndpoint: widget.hostEndpoint,
       envelopeBuilder: builder,
       allowLoopback: widget.allowLoopback,
     );
 
-    _stateSubscription = _controlClient.stateStream.listen((state) {
+    _stateSubscription = client.stateStream.listen((state) {
       if (mounted) {
         setState(() => _connectionState = state);
       }
     });
 
-    _controlClient.connect();
+    if (mounted) {
+      setState(() {
+        _controlClient = client;
+      });
+    } else {
+      _controlClient = client;
+    }
+
+    await client.connect();
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _stateSubscription?.cancel();
-    _controlClient.dispose();
+    _controlClient?.dispose();
     super.dispose();
   }
 
@@ -68,15 +80,23 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     // Pausar/desconectar ordenadamente cuando la app pasa a background
     if (state == AppLifecycleState.paused) {
-      _controlClient.dispose();
+      _controlClient?.dispose();
     } else if (state == AppLifecycleState.resumed) {
-      _controlClient.connect();
+      _controlClient?.connect();
     }
   }
 
   Future<void> _sendCommand(String commandId, Map<String, dynamic> payload) async {
+    if (_controlClient == null) {
+      final km = widget.keyManager ?? widget.pairingClient.keyManager;
+      await km.ensureInitialized();
+      if (_controlClient == null) {
+        await _initControlClient();
+      }
+    }
+
     try {
-      final res = await _controlClient.sendCommand(
+      final res = await _controlClient!.sendCommand(
         commandId: commandId,
         payload: payload,
       );
@@ -230,7 +250,7 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
           IconButton(
             icon: const Icon(Icons.refresh, color: Colors.white70),
             tooltip: 'Reconectar',
-            onPressed: () => _controlClient.connect(),
+            onPressed: () => _controlClient?.connect(),
           ),
           IconButton(
             icon: const Icon(Icons.link_off, color: Color(0xFFEF4444)),

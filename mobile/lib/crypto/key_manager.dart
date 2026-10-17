@@ -57,19 +57,44 @@ class KeyManager {
         _ed25519 = ed25519 ?? Ed25519(),
         _sha256 = sha256 ?? Sha256();
 
+  /// Comprueba si el gestor criptográfico ha completado su inicialización.
+  bool get isInitialized => _keyPair != null && _deviceId != null && _publicKeyBytes != null;
+
+  /// Asegura de forma asíncrona e idempotente que las claves estén cargadas o generadas.
+  Future<void> ensureInitialized() async {
+    if (!isInitialized) {
+      await initialize();
+    }
+  }
+
   /// Inicializa el gestor: recupera la clave de hardware o genera una nueva de forma persistente.
   Future<void> initialize() async {
-    final storedKeyHex = await _storage.read(_privateKeyStorageKey);
+    if (isInitialized) return;
+
+    String? storedKeyHex;
+    try {
+      storedKeyHex = await _storage.read(_privateKeyStorageKey);
+    } catch (_) {
+      storedKeyHex = null;
+    }
 
     if (storedKeyHex != null && storedKeyHex.isNotEmpty) {
-      // Reconstruir el par de claves desde los 32 bytes de semilla privada
-      final privBytes = _hexToBytes(storedKeyHex);
-      _keyPair = await _ed25519.newKeyPairFromSeed(privBytes);
-    } else {
+      try {
+        // Reconstruir el par de claves desde los 32 bytes de semilla privada
+        final privBytes = _hexToBytes(storedKeyHex);
+        _keyPair = await _ed25519.newKeyPairFromSeed(privBytes);
+      } catch (_) {
+        _keyPair = null;
+      }
+    }
+
+    if (_keyPair == null) {
       // Generar nuevo par de claves criptográficas Ed25519
       _keyPair = await _ed25519.newKeyPair();
       final privBytes = await _keyPair!.extractPrivateKeyBytes();
-      await _storage.write(_privateKeyStorageKey, _bytesToHex(privBytes));
+      try {
+        await _storage.write(_privateKeyStorageKey, _bytesToHex(privBytes));
+      } catch (_) {}
     }
 
     final pubKey = await _keyPair!.extractPublicKey();
@@ -103,6 +128,9 @@ class KeyManager {
 
   /// Firma digitalmente un payload canónico RFC 8785 y retorna la firma en Base64.
   Future<String> signPayload(Map<String, dynamic> canonicalDict) async {
+    if (!isInitialized) {
+      await ensureInitialized();
+    }
     if (_keyPair == null) {
       throw const SecurityStorageException('KeyManager no ha sido inicializado.');
     }

@@ -26,6 +26,9 @@ class PairingClient {
         _storage = storage,
         _httpClient = httpClient ?? http.Client();
 
+  KeyManager get keyManager => _keyManager;
+  SecureStorageAdapter get storage => _storage;
+
   /// Procesa el contenido crudo escaneado desde el código QR:
   /// 1. Parsea el JSON del desafío emitido por el Host.
   /// 2. Comprueba que el token no haya expirado (TTL de 3 minutos).
@@ -36,6 +39,8 @@ class PairingClient {
     String qrContent, {
     String deviceLabel = 'Mobile Control Client',
   }) async {
+    await _keyManager.ensureInitialized();
+
     Map<String, dynamic> challenge;
     try {
       challenge = json.decode(qrContent) as Map<String, dynamic>;

@@ -31,6 +31,9 @@ class EnvelopeBuilder {
     final timestampUtc = customTimestamp ?? (DateTime.now().toUtc().millisecondsSinceEpoch ~/ 1000);
     // Nonce de 32 caracteres hexadecimales (16 bytes de entropía segura CSPRNG)
     final nonce = customNonce ?? _generateSecureNonce();
+
+    // Garantizar que la identidad criptográfica esté cargada
+    await _keyManager.ensureInitialized();
     final deviceId = _keyManager.deviceId;
 
     // Diccionario canónico que será firmado

@@ -2,16 +2,19 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
+import '../../crypto/key_manager.dart';
 import '../../services/pairing_client.dart';
 import 'deck_screen.dart';
 
 /// Pantalla de emparejamiento con visor de cámara para escanear el código QR del Host.
 class ScannerScreen extends StatefulWidget {
   final PairingClient pairingClient;
+  final KeyManager? keyManager;
 
   const ScannerScreen({
     super.key,
     required this.pairingClient,
+    this.keyManager,
   });
 
   @override
@@ -54,10 +57,14 @@ class _ScannerScreenState extends State<ScannerScreen> {
 
       if (mounted) {
         HapticFeedback.heavyImpact();
+        final initializedKeyManager = widget.keyManager ?? widget.pairingClient.keyManager;
+        await initializedKeyManager.ensureInitialized();
+
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(
             builder: (_) => DeckScreen(
               hostEndpoint: pairedEndpoint,
+              keyManager: initializedKeyManager,
               pairingClient: widget.pairingClient,
             ),
           ),

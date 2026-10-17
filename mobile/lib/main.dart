@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'crypto/key_manager.dart';
+import 'services/secure_storage_adapter.dart';
 import 'services/pairing_client.dart';
 import 'ui/screens/scanner_screen.dart';
 import 'ui/screens/deck_screen.dart';
@@ -9,10 +10,9 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   // 1. Inicialización de la identidad criptográfica respaldada por Hardware Keystore / Keychain
-  // Nota: FlutterHardwareStorageAdapter utiliza flutter_secure_storage cuando corre en dispositivo
-  final storage = MemorySecureStorageAdapter(); // Fallback en memoria / desarrollo
+  final storage = FlutterSecureStorageAdapter();
   final keyManager = KeyManager(storage: storage);
-  await keyManager.initialize();
+  await keyManager.ensureInitialized();
 
   // 2. Comprobar si ya existe un Host previamente vinculado
   final pairingClient = PairingClient(
@@ -70,6 +70,7 @@ class SecureDeckApp extends StatelessWidget {
             )
           : ScannerScreen(
               pairingClient: pairingClient,
+              keyManager: keyManager,
             ),
     );
   }
