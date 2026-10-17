@@ -793,7 +793,7 @@ def test_wol_send_magic_packet_dual_burst(monkeypatch):
     mock_sock = MagicMock()
     monkeypatch.setattr("socket.socket", lambda *args, **kwargs: mock_sock)
 
-    with patch("time.sleep") as mock_sleep:
+    with patch("host.core.network.wol.time.sleep") as mock_sleep:
         success = send_magic_packet("30:56:0F:23:15:2C", broadcast_ip="192.168.1.255", port=9)
         assert success is True
         # Debe haber llamado a sleep(0.1) entre ráfagas

@@ -152,10 +152,16 @@ def play_audio_chunk(
     """
     Decodifica y encola un fragmento de audio PCM recibido para reproducción inmediata.
     """
+    if len(audio_b64) > 32768:
+        raise AudioStreamError("Fragmento de audio codificado excede el tamaño máximo permitido (32 KB).")
+
     try:
         raw_pcm = base64.b64decode(audio_b64, validate=True)
     except Exception as e:
         raise AudioStreamError(f"Datos de audio Base64 inválidos: {e}") from e
+
+    if len(raw_pcm) > 32768:
+        raise AudioStreamError("Fragmento de audio PCM decodificado excede el límite máximo (32 KB).")
 
     player = AudioPlayerWorker.get_instance()
     player.enqueue_chunk(raw_pcm, sample_rate=sample_rate, channels=channels)

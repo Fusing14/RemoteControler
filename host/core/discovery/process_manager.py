@@ -313,14 +313,19 @@ def list_running_apps() -> List[Dict[str, Any]]:
 def close_running_app(pid: int, force: bool = False) -> Dict[str, Any]:
     """
     Cierra una aplicación activa por su Process ID (PID).
-    Protege ante el cierre del propio host o procesos del núcleo del sistema.
+    Protege ante el cierre del propio host, proceso padre, procesos del núcleo
+    o procesos pertenecientes a la sesión del sistema (Session 0).
     """
+    if pid <= 0 or pid == 4:
+        raise AppCloseSecurityError("Operación denegada: Proceso protegido del sistema operativo.")
+
     current_pid = os.getpid()
     if pid == current_pid:
         raise AppCloseSecurityError("Operación denegada: No es posible cerrar el proceso del propio servidor Host.")
 
-    if pid <= 4:
-        raise AppCloseSecurityError("Operación denegada: Proceso protegido del sistema operativo.")
+    parent_pid = os.getppid() if hasattr(os, "getppid") else None
+    if parent_pid is not None and pid == parent_pid:
+        raise AppCloseSecurityError("Operación denegada: No es posible cerrar el proceso padre del servidor Host.")
 
     proc_name = get_process_name_by_pid(pid).lower()
     if proc_name in PROTECTED_PROCESS_NAMES:
@@ -333,6 +338,16 @@ def close_running_app(pid: int, force: bool = False) -> Dict[str, Any]:
     user32 = ctypes.windll.user32
     kernel32 = ctypes.windll.kernel32
     WM_CLOSE = 0x0010
+
+    # Comprobar pertenencia de sesión en Windows
+    my_sid = wintypes.DWORD()
+    proc_sid = wintypes.DWORD()
+    if kernel32.ProcessIdToSessionId(current_pid, ctypes.byref(my_sid)):
+        if kernel32.ProcessIdToSessionId(pid, ctypes.byref(proc_sid)):
+            if proc_sid.value == 0 and my_sid.value != 0:
+                raise AppCloseSecurityError("Operación denegada: El proceso pertenece a la sesión de servicios del sistema (Session 0).")
+            if proc_sid.value != my_sid.value:
+                raise AppCloseSecurityError("Operación denegada: El proceso pertenece a otra sesión de usuario.")
 
     if not force:
         # 1. Cierre elegante: enviar mensaje WM_CLOSE a todas las ventanas asociadas

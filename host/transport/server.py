@@ -10,6 +10,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Requ
 from pydantic import BaseModel, Field
 
 from host.transport.network_utils import is_allowed_source_ip
+from host.engine.contracts.commands import CommandCatalog
 from host.engine.contracts.envelope import SignedEnvelope
 from host.engine.dispatcher import CommandDispatcher, ExecutionResult, ExecutionStatus
 from host.core.storage.device_store import TrustedDeviceStore
@@ -18,6 +19,8 @@ from host.core.security.rate_limiter import RateLimiter
 from host.core.audit.logger import AuditLogger
 
 logger = logging.getLogger("RemoteControler.Server")
+
+MAX_WS_MESSAGE_SIZE = 65536  # Límite máximo de trama WebSocket (64 KB) contra DoS por memoria
 
 
 class PairRequestBody(BaseModel):
@@ -41,6 +44,14 @@ def create_app(
     """
     app = FastAPI(title="RemoteControler Daemon", docs_url=None, redoc_url=None)
 
+    # Rate Limiter específico para streaming de audio (hasta 25 pkts/seg para dispositivos autorizados)
+    stream_rate_limiter = RateLimiter(
+        max_rate_per_second=25.0,
+        bucket_capacity=30.0,
+        max_failures=rate_limiter.max_failures,
+        base_ban_duration_seconds=rate_limiter.base_ban_duration,
+    )
+
     @app.get("/health")
     async def health_check(request: Request):
         client_ip = request.client.host if request.client else "UNKNOWN"
@@ -52,6 +63,7 @@ def create_app(
     async def pair_device(body: PairRequestBody, request: Request):
         """
         Canjea un token de emparejamiento efímero para registrar la clave pública del móvil.
+        Protegido contra fuerza bruta, timing attacks y DoS.
         """
         client_ip = request.client.host if request.client else "UNKNOWN"
         logger.info(
@@ -71,12 +83,20 @@ def create_app(
             )
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Acceso de red no autorizado.")
 
-        # Rate limiter check por IP
+        # Rate limiter check por IP (bloqueo si la IP está en jail)
+        is_banned, remaining = rate_limiter.is_banned(client_ip)
+        if is_banned:
+            logger.warning("Petición POST /pair rechazada: IP %s bloqueada tras fallos reiterados (restan %.1fs)", client_ip, remaining)
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"IP temporalmente bloqueada tras fallos reiterados ({int(remaining)}s restantes)."
+            )
+
         if not rate_limiter.check_rate_limit(client_ip):
             logger.warning("Petición POST /pair rechazada: Rate limit excedido para IP %s", client_ip)
             raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Tasa de peticiones excedida.")
 
-        # Verificar y consumir token de un solo uso
+        # Verificar y consumir token de un solo uso (con compare_digest en tiempo constante)
         is_token_valid = pairing_manager.verify_and_consume_token(body.pairing_token)
         if not is_token_valid:
             reason = pairing_manager.last_rejection_reason or "Token de emparejamiento inválido o expirado"
@@ -122,7 +142,7 @@ def create_app(
             }
         except Exception as e:
             logger.error("Error al registrar dispositivo '%s': %s", body.label, e)
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Datos de dispositivo inválidos.")
 
     @app.websocket("/ws/control")
     async def websocket_control_endpoint(websocket: WebSocket):
@@ -161,16 +181,39 @@ def create_app(
             while True:
                 raw_text = await websocket.receive_text()
 
-                # Control de Tasa (Rate Limiting) por IP
-                if not rate_limiter.check_rate_limit(client_ip):
+                # A. Protección Anti-DoS: Rechazo inmediato de mensajes de tamaño excesivo (>64 KB)
+                if len(raw_text) > MAX_WS_MESSAGE_SIZE:
+                    logger.warning(
+                        "Mensaje WebSocket rechazado por exceder el tamaño máximo permitido (%d bytes) desde %s",
+                        len(raw_text), client_ip
+                    )
+                    rate_limiter.record_failure(client_ip)
+                    audit_logger.log_event(
+                        event_type="PAYLOAD_OVERSIZE",
+                        result_status="MESSAGE_TOO_LARGE",
+                        client_ip=client_ip,
+                        details={"length": len(raw_text)}
+                    )
                     await websocket.send_text(json.dumps({
                         "status": ExecutionStatus.REJECTED.value,
-                        "message": "Tasa máxima de peticiones excedida.",
-                        "error_code": "RATE_LIMITED"
+                        "message": "Mensaje excede el tamaño máximo permitido (64 KB).",
+                        "error_code": "MESSAGE_TOO_LARGE"
                     }))
                     continue
 
-                # Parsear SignedEnvelope
+                # B. Verificación de ban continuo por IP
+                is_ip_banned, ip_remaining = rate_limiter.is_banned(client_ip)
+                if is_ip_banned:
+                    logger.warning("Conexión WebSocket cerrada: IP %s bloqueada tras fallos (restan %.1fs)", client_ip, ip_remaining)
+                    await websocket.send_text(json.dumps({
+                        "status": ExecutionStatus.REJECTED.value,
+                        "message": f"IP temporalmente bloqueada tras fallos reiterados ({int(ip_remaining)}s restantes).",
+                        "error_code": "IP_BANNED"
+                    }))
+                    await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+                    return
+
+                # C. Parsear SignedEnvelope
                 try:
                     envelope = SignedEnvelope.model_validate_json(raw_text)
                 except Exception as e:
@@ -187,7 +230,7 @@ def create_app(
                     }))
                     continue
 
-                # Control de Tasa y Ban por device_id
+                # D. Control de Tasa y Ban por device_id
                 dev_id = envelope.device_id
                 is_dev_banned, dev_remaining = rate_limiter.is_banned(dev_id)
                 if is_dev_banned:
@@ -198,18 +241,33 @@ def create_app(
                     }))
                     continue
 
-                if envelope.command_id != CommandCatalog.MIC_AUDIO_CHUNK and not rate_limiter.check_rate_limit(dev_id):
-                    await websocket.send_text(json.dumps({
-                        "status": ExecutionStatus.REJECTED.value,
-                        "message": "Tasa máxima por dispositivo excedida.",
-                        "error_code": "RATE_LIMITED"
-                    }))
-                    continue
+                # E. Control de Tasa inteligente: exención de streaming solo para dispositivos ya autorizados
+                is_audio_chunk = bool(envelope.command_id == CommandCatalog.MIC_AUDIO_CHUNK)
+                is_trusted_device = device_store.is_device_trusted(dev_id)
 
-                # Despacho Seguro
+                if is_audio_chunk and is_trusted_device:
+                    # Dispositivo legítimo emparejado: ráfaga de streaming de hasta 25 paquetes/seg
+                    if not stream_rate_limiter.check_rate_limit(dev_id):
+                        await websocket.send_text(json.dumps({
+                            "status": ExecutionStatus.REJECTED.value,
+                            "message": "Tasa máxima de streaming de audio excedida.",
+                            "error_code": "RATE_LIMITED"
+                        }))
+                        continue
+                else:
+                    # Comandos estándar o intentos de spoofing con MIC_AUDIO_CHUNK sin estar emparejado
+                    if not rate_limiter.check_rate_limit(client_ip) or not rate_limiter.check_rate_limit(dev_id):
+                        await websocket.send_text(json.dumps({
+                            "status": ExecutionStatus.REJECTED.value,
+                            "message": "Tasa máxima por dispositivo excedida.",
+                            "error_code": "RATE_LIMITED"
+                        }))
+                        continue
+
+                # F. Despacho Seguro (Validación Ed25519, Anti-Replay y Ejecución)
                 result: ExecutionResult = dispatcher.dispatch_safe(envelope)
 
-                # Registrar auditoría y actualizar penalizaciones
+                # G. Registrar auditoría y penalizaciones inmediatas
                 if result.status == ExecutionStatus.SUCCESS:
                     rate_limiter.record_success(dev_id)
                     rate_limiter.record_success(client_ip)
@@ -221,6 +279,7 @@ def create_app(
                         client_ip=client_ip
                     )
                 else:
+                    # Penalización de fallo ante firma manipulada, dispositivo desconocido o ataque de repetición
                     rate_limiter.record_failure(dev_id)
                     rate_limiter.record_failure(client_ip)
                     audit_logger.log_event(

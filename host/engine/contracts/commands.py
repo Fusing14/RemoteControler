@@ -277,8 +277,8 @@ class MicAudioChunkPayload(BaseModel):
     audio_b64: str = Field(
         ...,
         min_length=1,
-        max_length=65536,
-        description="Fragmento de audio PCM 16-bit mono codificado en Base64."
+        max_length=32768,
+        description="Fragmento de audio PCM 16-bit mono codificado en Base64 (máx 32 KB)."
     )
     sample_rate: int = Field(
         default=16000,
@@ -307,7 +307,7 @@ class AppClosePayload(BaseModel):
     """
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    pid: int = Field(..., gt=0, description="Process ID (PID) de la aplicación a cerrar.")
+    pid: int = Field(..., description="Process ID (PID) de la aplicación a cerrar.")
     force: bool = Field(default=False, description="True para forzar el cierre inmediato (SIGKILL/TerminateProcess).")
 
 
