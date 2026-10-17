@@ -7,6 +7,8 @@ import '../../protocol/envelope_builder.dart';
 import '../../crypto/key_manager.dart';
 import '../widgets/deck_button.dart';
 import 'scanner_screen.dart';
+import 'screen_viewer_screen.dart';
+import 'games_screen.dart';
 import '../../services/updater_service.dart';
 import 'package:ota_update/ota_update.dart';
 
@@ -191,6 +193,92 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
             child: const Text('Lanzar', style: TextStyle(color: Colors.white)),
           ),
         ],
+      ),
+    );
+  }
+
+  void _showUnlockPcDialog() {
+    final passwordController = TextEditingController();
+    bool obscureText = true;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          return AlertDialog(
+            backgroundColor: const Color(0xFF161A23),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            title: const Row(
+              children: [
+                Icon(Icons.lock_open_rounded, color: Color(0xFF06B6D4), size: 26),
+                SizedBox(width: 10),
+                Text(
+                  'Desbloquear PC',
+                  style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                ),
+              ],
+            ),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Ingresa tu contraseña de Windows para autenticar y desbloquear la sesión:',
+                  style: TextStyle(color: Color(0xFF94A3B8), fontSize: 13),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: passwordController,
+                  obscureText: obscureText,
+                  autofocus: true,
+                  style: const TextStyle(color: Colors.white, fontSize: 14),
+                  decoration: InputDecoration(
+                    hintText: 'Contraseña de Windows',
+                    hintStyle: const TextStyle(color: Colors.white30, fontSize: 14),
+                    filled: true,
+                    fillColor: const Color(0xFF0F1117),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: BorderSide.none,
+                    ),
+                    suffixIcon: IconButton(
+                      icon: Icon(
+                        obscureText ? Icons.visibility_off : Icons.visibility,
+                        color: Colors.white54,
+                        size: 20,
+                      ),
+                      onPressed: () {
+                        setDialogState(() {
+                          obscureText = !obscureText;
+                        });
+                      },
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
+              ),
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF06B6D4),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                ),
+                icon: const Icon(Icons.check, size: 18, color: Colors.white),
+                label: const Text('Desbloquear', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                onPressed: () async {
+                  final pwd = passwordController.text;
+                  if (pwd.isEmpty) return;
+                  Navigator.pop(ctx);
+                  await _sendCommand('UNLOCK_PC', {'password': pwd});
+                },
+              ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -654,6 +742,72 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
                         message: '¿Confirmas el apagado del PC?',
                         onConfirm: () => _sendCommand('SYS_POWER', {'action': 'SHUTDOWN', 'force': true}),
                       );
+                      return Future.value();
+                    },
+                  ),
+                  DeckButton(
+                    label: 'Desbloquear PC',
+                    subtitle: 'Con contraseña',
+                    icon: Icons.lock_open_rounded,
+                    accentColor: const Color(0xFF06B6D4), // Cyan
+                    onPressed: () {
+                      _showUnlockPcDialog();
+                      return Future.value();
+                    },
+                  ),
+                ],
+              ),
+
+              const SizedBox(height: 24),
+
+              // Sección Pantalla en Vivo y Juegos Autodetectados
+              const Text(
+                'PANTALLA Y BIBLIOTECA',
+                style: TextStyle(
+                  color: Color(0xFF64748B),
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 1.2,
+                ),
+              ),
+              const SizedBox(height: 12),
+              GridView.count(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                crossAxisCount: 2,
+                mainAxisSpacing: 12,
+                crossAxisSpacing: 12,
+                childAspectRatio: 1.4,
+                children: [
+                  DeckButton(
+                    label: 'Ver Pantalla',
+                    subtitle: 'Transmisión en vivo',
+                    icon: Icons.monitor_rounded,
+                    accentColor: const Color(0xFF8B5CF6), // Púrpura
+                    onPressed: () {
+                      if (_controlClient != null) {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => ScreenViewerScreen(controlClient: _controlClient!),
+                          ),
+                        );
+                      }
+                      return Future.value();
+                    },
+                  ),
+                  DeckButton(
+                    label: 'Juegos Instalados',
+                    subtitle: 'Steam y Epic Games',
+                    icon: Icons.sports_esports_rounded,
+                    accentColor: const Color(0xFF10B981), // Esmeralda
+                    onPressed: () {
+                      if (_controlClient != null) {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => GamesScreen(controlClient: _controlClient!),
+                          ),
+                        );
+                      }
                       return Future.value();
                     },
                   ),

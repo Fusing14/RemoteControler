@@ -6,14 +6,19 @@ Orquestador central que verifica autenticidad, frescura y rutea hacia los handle
 import time
 import logging
 from enum import Enum
-from typing import Optional, Any
+from typing import Optional, Dict, Any
 from pydantic import BaseModel, Field, ConfigDict, ValidationError
 
 from host.engine.contracts.commands import (
     CommandCatalog,
+    GamePlatform,
     MediaPayload,
     PowerPayload,
     AppLaunchPayload,
+    GamesListPayload,
+    GameLaunchPayload,
+    ScreenFramePayload,
+    UnlockPcPayload,
 )
 from host.engine.contracts.envelope import SignedEnvelope
 from host.core.storage.device_store import TrustedDeviceStore
@@ -27,9 +32,24 @@ from host.core.crypto.exceptions import (
     ReplayAttackDetectedError,
     InvalidPayloadError,
 )
+from host.core.discovery.game_scanner import (
+    scan_installed_games,
+    scan_steam_games,
+    scan_epic_games,
+)
 from host.engine.handlers.media import execute_media_command, MediaExecutionError
 from host.engine.handlers.power import execute_power_command, PowerExecutionError
-from host.engine.handlers.apps import execute_app_command, AppLaunchError
+from host.engine.handlers.apps import (
+    execute_app_command,
+    execute_game_launch,
+    AppLaunchError,
+)
+from host.engine.handlers.screen import capture_screen_jpeg, ScreenCaptureError
+from host.engine.handlers.unlock import (
+    execute_unlock_pc,
+    UnlockAuthenticationError,
+    UnlockExecutionError,
+)
 
 logger = logging.getLogger("RemoteControler.Dispatcher")
 
@@ -56,6 +76,7 @@ class ExecutionResult(BaseModel):
     timestamp_utc: int = Field(default_factory=lambda: int(time.time()))
     message: str
     error_code: Optional[str] = None
+    data: Optional[Dict[str, Any]] = None
 
 
 class CommandDispatcher:
@@ -110,6 +131,8 @@ class CommandDispatcher:
 
         # Paso 5: Despacho a Handlers nativos Win32 (Sin Subshells)
         try:
+            extra_data = None
+
             if envelope.command_id == CommandCatalog.MEDIA:
                 assert isinstance(parsed_payload, MediaPayload)
                 execute_media_command(parsed_payload)
@@ -119,16 +142,53 @@ class CommandDispatcher:
             elif envelope.command_id == CommandCatalog.APP_LAUNCH:
                 assert isinstance(parsed_payload, AppLaunchPayload)
                 execute_app_command(parsed_payload)
+            elif envelope.command_id == CommandCatalog.GAMES_LIST:
+                assert isinstance(parsed_payload, GamesListPayload)
+                if parsed_payload.platform == GamePlatform.STEAM:
+                    games = scan_steam_games()
+                elif parsed_payload.platform == GamePlatform.EPIC:
+                    games = scan_epic_games()
+                else:
+                    games = scan_installed_games()
+                extra_data = {"games": games}
+            elif envelope.command_id == CommandCatalog.GAME_LAUNCH:
+                assert isinstance(parsed_payload, GameLaunchPayload)
+                execute_game_launch(parsed_payload.platform.value, parsed_payload.game_id)
+            elif envelope.command_id == CommandCatalog.SCREEN_FRAME:
+                assert isinstance(parsed_payload, ScreenFramePayload)
+                extra_data = capture_screen_jpeg(
+                    max_width=parsed_payload.max_width,
+                    max_height=parsed_payload.max_height,
+                    quality=parsed_payload.quality
+                )
+            elif envelope.command_id == CommandCatalog.UNLOCK_PC:
+                assert isinstance(parsed_payload, UnlockPcPayload)
+                execute_unlock_pc(parsed_payload.password, parsed_payload.username)
             else:
                 raise ValueError(f"Comando no soportado: {envelope.command_id}")
+
+            success_msg = (
+                "PC desbloqueado exitosamente."
+                if envelope.command_id == CommandCatalog.UNLOCK_PC
+                else f"Comando {envelope.command_id.value} ejecutado exitosamente."
+            )
 
             return ExecutionResult(
                 status=ExecutionStatus.SUCCESS,
                 command_id=envelope.command_id.value,
-                message=f"Comando {envelope.command_id.value} ejecutado exitosamente."
+                message=success_msg,
+                data=extra_data
             )
 
-        except (MediaExecutionError, PowerExecutionError, AppLaunchError) as e:
+        except UnlockAuthenticationError as e:
+            logger.warning("Fallo de autenticación en UNLOCK_PC: %s", e)
+            return ExecutionResult(
+                status=ExecutionStatus.ERROR,
+                command_id=envelope.command_id.value,
+                message="Contraseña de Windows incorrecta.",
+                error_code="INVALID_PASSWORD"
+            )
+        except (MediaExecutionError, PowerExecutionError, AppLaunchError, ScreenCaptureError, UnlockExecutionError) as e:
             logger.error("Error durante la ejecución del handler Win32: %s", e)
             return ExecutionResult(
                 status=ExecutionStatus.ERROR,

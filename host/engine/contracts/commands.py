@@ -14,6 +14,10 @@ class CommandCatalog(str, Enum):
     MEDIA = "MEDIA"
     SYS_POWER = "SYS_POWER"
     APP_LAUNCH = "APP_LAUNCH"
+    GAMES_LIST = "GAMES_LIST"
+    GAME_LAUNCH = "GAME_LAUNCH"
+    SCREEN_FRAME = "SCREEN_FRAME"
+    UNLOCK_PC = "UNLOCK_PC"
 
 
 class MediaAction(str, Enum):
@@ -39,6 +43,12 @@ class PowerAction(str, Enum):
 class AppPlatform(str, Enum):
     """Plataformas seguras de lanzamiento de aplicaciones mediante identificadores internos."""
     STEAM = "STEAM"
+
+
+class GamePlatform(str, Enum):
+    """Plataformas de juegos soportadas para autodetección y lanzamiento."""
+    STEAM = "steam"
+    EPIC = "epic"
 
 
 class MediaPayload(BaseModel):
@@ -78,7 +88,7 @@ class PowerPayload(BaseModel):
 
 class AppLaunchPayload(BaseModel):
     """
-    Payload para lanzamiento de aplicaciones.
+    Payload para lanzamiento de aplicaciones (Compatibilidad retroactiva).
     Mitigación contra RCE y Path Traversal:
     - Se prohíben absolutamente rutas a ejecutables (ej. 'C:\\...').
     - Solo se admiten identificadores numéricos verificados de Steam (1 a 2,147,483,647).
@@ -94,12 +104,81 @@ class AppLaunchPayload(BaseModel):
     )
 
 
-CommandPayloadType = Union[MediaPayload, PowerPayload, AppLaunchPayload]
+class GamesListPayload(BaseModel):
+    """
+    Payload para consulta de juegos instalados (Steam y Epic Games).
+    """
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    platform: Optional[GamePlatform] = Field(
+        default=None,
+        description="Filtro opcional de plataforma ('steam' o 'epic')."
+    )
+
+
+class GameLaunchPayload(BaseModel):
+    """
+    Payload para lanzamiento seguro de juegos autodetectados.
+    """
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    platform: GamePlatform = Field(..., description="Plataforma del juego ('steam' o 'epic').")
+    game_id: str = Field(
+        ...,
+        min_length=1,
+        max_length=128,
+        pattern=r"^[a-zA-Z0-9_\-\.]+$",
+        description="Identificador validado del juego (AppID numérico o AppName alfanumérico)."
+    )
+
+
+class ScreenFramePayload(BaseModel):
+    """
+    Payload para solicitud de fotograma de pantalla en vivo.
+    """
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    max_width: int = Field(default=1280, ge=320, le=1920)
+    max_height: int = Field(default=720, ge=240, le=1080)
+    quality: int = Field(default=70, ge=30, le=95)
+
+
+class UnlockPcPayload(BaseModel):
+    """
+    Payload para desbloqueo remoto autenticado de la sesión de Windows.
+    """
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    password: str = Field(
+        ...,
+        min_length=1,
+        max_length=256,
+        description="Contraseña de la cuenta de Windows a autenticar mediante LogonUserW."
+    )
+    username: Optional[str] = Field(
+        default=None,
+        max_length=128,
+        description="Nombre de usuario de Windows (por defecto el usuario actual de la sesión)."
+    )
+
+
+CommandPayloadType = Union[
+    MediaPayload,
+    PowerPayload,
+    AppLaunchPayload,
+    GamesListPayload,
+    GameLaunchPayload,
+    ScreenFramePayload,
+    UnlockPcPayload,
+]
 
 COMMAND_PAYLOAD_SCHEMA_MAP: Dict[CommandCatalog, type[BaseModel]] = {
     CommandCatalog.MEDIA: MediaPayload,
     CommandCatalog.SYS_POWER: PowerPayload,
     CommandCatalog.APP_LAUNCH: AppLaunchPayload,
+    CommandCatalog.GAMES_LIST: GamesListPayload,
+    CommandCatalog.GAME_LAUNCH: GameLaunchPayload,
+    CommandCatalog.SCREEN_FRAME: ScreenFramePayload,
+    CommandCatalog.UNLOCK_PC: UnlockPcPayload,
 }
 
 

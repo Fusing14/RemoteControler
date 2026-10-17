@@ -76,7 +76,7 @@ class UpdaterService {
       }
     }
 
-    final hasUpdate = isNewerVersion(tagName, fullCurrent) && apkDownloadUrl != null;
+    final hasUpdate = isNewerVersion(tagName, currentVersion) && apkDownloadUrl != null;
 
     return UpdateInfo(
       hasUpdate: hasUpdate,
@@ -99,7 +99,7 @@ class UpdaterService {
     }
   }
 
-  /// Compara si latestTag es superior a currentVersion (SemVer + Build).
+  /// Compara si latestTag es estrictamente superior a currentVersion (SemVer + Build).
   static bool isNewerVersion(String latestTag, String currentVersion) {
     final cleanLatest = latestTag.replaceAll(RegExp(r'^[vV]'), '').trim();
     final cleanCurrent = currentVersion.replaceAll(RegExp(r'^[vV]'), '').trim();
@@ -130,12 +130,16 @@ class UpdaterService {
       if (latestSemver[i] < currentSemver[i]) return false;
     }
 
-    // Si la versión principal es idéntica, comparar build number
+    // Si SemVer es idéntico (ej: 1.0.15 == 1.0.15), comparar build number solo si ambos lo tienen
     final latestBuild =
         latestParts.length > 1 ? (int.tryParse(latestParts[1]) ?? 0) : 0;
     final currentBuild =
         currentParts.length > 1 ? (int.tryParse(currentParts[1]) ?? 0) : 0;
 
-    return latestBuild > currentBuild;
+    if (latestBuild > 0 && currentBuild > 0) {
+      return latestBuild > currentBuild;
+    }
+
+    return false;
   }
 }

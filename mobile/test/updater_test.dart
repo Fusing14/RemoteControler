@@ -1,5 +1,5 @@
 import 'dart:convert';
-import 'package:flutter_test/flutter_test.dart';
+import 'package:test/test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 
@@ -29,10 +29,18 @@ void main() {
 
     test('Rechaza versiones idénticas o inferiores', () {
       expect(UpdaterService.isNewerVersion('v1.0.0', '1.0.0'), isFalse);
+      expect(UpdaterService.isNewerVersion('v1.0.15', '1.0.15'), isFalse);
+      expect(UpdaterService.isNewerVersion('1.0.15', '1.0.15'), isFalse);
       expect(UpdaterService.isNewerVersion('1.0.0+1', '1.0.0+1'), isFalse);
       expect(UpdaterService.isNewerVersion('v1.0.0', '1.0.1'), isFalse);
+      expect(UpdaterService.isNewerVersion('v1.0.15', '1.0.16'), isFalse);
       expect(UpdaterService.isNewerVersion('1.0.0+1', '1.0.0+2'), isFalse);
       expect(UpdaterService.isNewerVersion('v0.9.0', '1.0.0'), isFalse);
+    });
+
+    test('Detecta nueva versión con esquema v1.0.run_number', () {
+      expect(UpdaterService.isNewerVersion('v1.0.16', '1.0.15'), isTrue);
+      expect(UpdaterService.isNewerVersion('v1.0.20', '1.0.15'), isTrue);
     });
 
     test('Maneja etiquetas vacías o nulas de forma segura', () {
