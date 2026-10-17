@@ -27,7 +27,7 @@ class HostRejectedError implements Exception {
 }
 
 /// Estado de la conexión del cliente con el daemon.
-enum ConnectionState {
+enum DeckConnectionState {
   disconnected,
   connecting,
   connected,
@@ -43,9 +43,9 @@ class RemoteControlClient {
   StreamSubscription? _subscription;
   Timer? _heartbeatTimer;
 
-  ConnectionState _state = ConnectionState.disconnected;
-  final StreamController<ConnectionState> _stateController =
-      StreamController<ConnectionState>.broadcast();
+  DeckConnectionState _state = DeckConnectionState.disconnected;
+  final StreamController<DeckConnectionState> _stateController =
+      StreamController<DeckConnectionState>.broadcast();
 
   final Completer<Map<String, dynamic>>? _pendingResponseCompleter = null;
   Completer<Map<String, dynamic>>? _activeCommandCompleter;
@@ -62,8 +62,8 @@ class RemoteControlClient {
     _validateEndpoint(hostEndpoint);
   }
 
-  Stream<ConnectionState> get stateStream => _stateController.stream;
-  ConnectionState get state => _state;
+  Stream<DeckConnectionState> get stateStream => _stateController.stream;
+  DeckConnectionState get state => _state;
 
   /// Valida que el hostEndpoint apunte exclusivamente a la red Tailscale o localhost en modo dev.
   void _validateEndpoint(String endpoint) {
@@ -96,7 +96,7 @@ class RemoteControlClient {
   /// Establece la conexión WebSocket segura con el Host.
   Future<void> connect() async {
     if (_isDisposed) return;
-    _setState(ConnectionState.connecting);
+    _setState(DeckConnectionState.connecting);
 
     final wsUrl = Uri.parse('ws://$hostEndpoint/ws/control');
 
@@ -104,7 +104,7 @@ class RemoteControlClient {
       _channel = WebSocketChannel.connect(wsUrl);
       await _channel!.ready;
 
-      _setState(ConnectionState.connected);
+      _setState(DeckConnectionState.connected);
       _reconnectAttempts = 0;
 
       _subscription = _channel!.stream.listen(
@@ -159,14 +159,14 @@ class RemoteControlClient {
 
   void _scheduleReconnect() {
     if (_isDisposed) return;
-    _setState(ConnectionState.reconnecting);
+    _setState(DeckConnectionState.reconnecting);
 
     _reconnectAttempts++;
     // Backoff exponencial con jitter: min(30s, 1s * 1.5^intentos + jitter)
     final delaySeconds = min(30.0, pow(1.5, _reconnectAttempts) + _random.nextDouble());
 
     Timer(Duration(milliseconds: (delaySeconds * 1000).toInt()), () {
-      if (!_isDisposed && _state == ConnectionState.reconnecting) {
+      if (!_isDisposed && _state == DeckConnectionState.reconnecting) {
         connect();
       }
     });
@@ -175,7 +175,7 @@ class RemoteControlClient {
   void _startHeartbeat() {
     _heartbeatTimer?.cancel();
     _heartbeatTimer = Timer.periodic(const Duration(seconds: 25), (_) {
-      if (_state == ConnectionState.connected && _channel != null) {
+      if (_state == DeckConnectionState.connected && _channel != null) {
         // Ping pasivo o sondeo
       }
     });
@@ -187,7 +187,7 @@ class RemoteControlClient {
     required Map<String, dynamic> payload,
     Duration timeout = const Duration(seconds: 5),
   }) async {
-    if (_state != ConnectionState.connected || _channel == null) {
+    if (_state != DeckConnectionState.connected || _channel == null) {
       throw const NetworkConnectionException('No hay conexión activa con el Host.');
     }
 
@@ -216,7 +216,7 @@ class RemoteControlClient {
     );
   }
 
-  void _setState(ConnectionState newState) {
+  void _setState(DeckConnectionState newState) {
     if (_state != newState) {
       _state = newState;
       _stateController.add(newState);
@@ -227,7 +227,7 @@ class RemoteControlClient {
   Future<void> dispose() async {
     _isDisposed = true;
     _cleanupConnection();
-    _setState(ConnectionState.disconnected);
+    _setState(DeckConnectionState.disconnected);
     await _stateController.close();
   }
 }

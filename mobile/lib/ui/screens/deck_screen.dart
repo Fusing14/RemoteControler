@@ -29,8 +29,8 @@ class DeckScreen extends StatefulWidget {
 
 class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
   late final RemoteControlClient _controlClient;
-  StreamSubscription<ConnectionState>? _stateSubscription;
-  ConnectionState _connectionState = ConnectionState.disconnected;
+  StreamSubscription<DeckConnectionState>? _stateSubscription;
+  DeckConnectionState _connectionState = DeckConnectionState.disconnected;
 
   @override
   void initState() {
@@ -176,16 +176,16 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
     String label;
 
     switch (_connectionState) {
-      case ConnectionState.connected:
+      case DeckConnectionState.connected:
         color = const Color(0xFF10B981); // Verde esmeralda
         label = widget.hostEndpoint;
         break;
-      case ConnectionState.connecting:
-      case ConnectionState.reconnecting:
+      case DeckConnectionState.connecting:
+      case DeckConnectionState.reconnecting:
         color = const Color(0xFFF59E0B); // Ámbar
         label = 'Conectando...';
         break;
-      case ConnectionState.disconnected:
+      case DeckConnectionState.disconnected:
         color = const Color(0xFFEF4444); // Rojo
         label = 'Desconectado';
         break;
