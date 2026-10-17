@@ -61,6 +61,25 @@ class AntiReplayValidator:
                 f"Desfase de reloj detectado ({drift:.2f}s). Límite permitido: {self.max_clock_skew_seconds}s"
             )
 
+    def check_nonce(self, nonce: str, current_time: Optional[float] = None) -> None:
+        """
+        Verifica si el nonce ya reside en la caché sin registrarlo aún.
+        Lanza ReplayAttackDetectedError si ya fue visto.
+        """
+        now = current_time if current_time is not None else time.time()
+        with self._lock:
+            self._cleanup_expired(now)
+            if nonce in self._seen_nonces:
+                raise ReplayAttackDetectedError(
+                    f"Ataque de repetición detectado: el nonce '{nonce}' ya fue utilizado y está en caché activa."
+                )
+
+    def commit_nonce(self, nonce: str, current_time: Optional[float] = None) -> None:
+        """Registra el nonce en la caché una vez que la firma criptográfica ha sido validada."""
+        now = current_time if current_time is not None else time.time()
+        with self._lock:
+            self._seen_nonces[nonce] = now + self.nonce_ttl_seconds
+
     def record_and_verify_nonce(self, nonce: str, current_time: Optional[float] = None) -> None:
         """
         Comprueba que el nonce no haya sido visto. Si es nuevo, lo almacena con su TTL.
