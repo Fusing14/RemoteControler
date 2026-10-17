@@ -19,6 +19,7 @@ from host.engine.contracts.commands import (
     GameLaunchPayload,
     ScreenFramePayload,
     CameraFramePayload,
+    MicAudioChunkPayload,
     UnlockPcPayload,
     AppsListPayload,
     OpenUrlPayload,
@@ -51,6 +52,7 @@ from host.engine.handlers.apps import (
 )
 from host.engine.handlers.screen import capture_screen_jpeg, ScreenCaptureError
 from host.engine.handlers.camera import capture_camera_jpeg, CameraCaptureError
+from host.engine.handlers.audio_stream import play_audio_chunk, AudioStreamError
 from host.engine.handlers.unlock import (
     execute_unlock_pc,
     UnlockAuthenticationError,
@@ -175,6 +177,14 @@ class CommandDispatcher:
                     max_height=parsed_payload.max_height,
                     quality=parsed_payload.quality
                 )
+            elif envelope.command_id == CommandCatalog.MIC_AUDIO_CHUNK:
+                assert isinstance(parsed_payload, MicAudioChunkPayload)
+                play_audio_chunk(
+                    audio_b64=parsed_payload.audio_b64,
+                    sample_rate=parsed_payload.sample_rate,
+                    channels=parsed_payload.channels
+                )
+                extra_data = {"played": True}
             elif envelope.command_id == CommandCatalog.UNLOCK_PC:
                 assert isinstance(parsed_payload, UnlockPcPayload)
                 execute_unlock_pc(parsed_payload.password, parsed_payload.username)
@@ -197,6 +207,8 @@ class CommandDispatcher:
                 success_msg = f"URL abierta en el navegador: {extra_data.get('url', '')}"
             elif envelope.command_id == CommandCatalog.APPS_LIST:
                 success_msg = f"{len(extra_data.get('apps', []))} aplicaciones detectadas en el sistema."
+            elif envelope.command_id == CommandCatalog.MIC_AUDIO_CHUNK:
+                success_msg = "Fragmento de audio procesado."
             else:
                 success_msg = f"Comando {envelope.command_id.value} ejecutado exitosamente."
 
@@ -215,7 +227,7 @@ class CommandDispatcher:
                 message="Contraseña o PIN de Windows incorrecta.",
                 error_code="INVALID_PASSWORD"
             )
-        except (MediaExecutionError, PowerExecutionError, AppLaunchError, ScreenCaptureError, CameraCaptureError, UnlockExecutionError) as e:
+        except (MediaExecutionError, PowerExecutionError, AppLaunchError, ScreenCaptureError, CameraCaptureError, AudioStreamError, UnlockExecutionError) as e:
             logger.error("Error durante la ejecución del handler Win32: %s", e)
             return ExecutionResult(
                 status=ExecutionStatus.ERROR,

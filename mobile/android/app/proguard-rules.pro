@@ -20,13 +20,3 @@
 
 # Flutter wrappers and plugins
 -dontwarn io.flutter.app.**
-
-# OkHttp3 optional TLS providers (used by ota_update)
--dontwarn org.bouncycastle.jsse.**
--dontwarn org.conscrypt.**
--dontwarn org.openjsse.**
--dontwarn okhttp3.**
--dontwarn okio.**
-
-# Keep ota_update plugin classes and FileProvider
--keep class sk.fourq.otaupdate.** { *; }

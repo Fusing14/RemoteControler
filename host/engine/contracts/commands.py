@@ -22,6 +22,7 @@ class CommandCatalog(str, Enum):
     APPS_LIST = "APPS_LIST"
     OPEN_URL = "OPEN_URL"
     CAMERA_FRAME = "CAMERA_FRAME"
+    MIC_AUDIO_CHUNK = "MIC_AUDIO_CHUNK"
 
 
 class MediaAction(str, Enum):
@@ -258,6 +259,32 @@ class OpenUrlPayload(BaseModel):
         return self
 
 
+class MicAudioChunkPayload(BaseModel):
+    """
+    Payload para fragmentos de audio del micrófono en tiempo real (Intercom / Walkie-Talkie).
+    """
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    audio_b64: str = Field(
+        ...,
+        min_length=1,
+        max_length=65536,
+        description="Fragmento de audio PCM 16-bit mono codificado en Base64."
+    )
+    sample_rate: int = Field(
+        default=16000,
+        ge=8000,
+        le=48000,
+        description="Frecuencia de muestreo en Hz (por defecto 16000)."
+    )
+    channels: int = Field(
+        default=1,
+        ge=1,
+        le=2,
+        description="Número de canales de audio (1 para mono, 2 para estéreo)."
+    )
+
+
 CommandPayloadType = Union[
     MediaPayload,
     PowerPayload,
@@ -266,6 +293,7 @@ CommandPayloadType = Union[
     GameLaunchPayload,
     ScreenFramePayload,
     CameraFramePayload,
+    MicAudioChunkPayload,
     UnlockPcPayload,
     AppsListPayload,
     OpenUrlPayload,
@@ -279,6 +307,7 @@ COMMAND_PAYLOAD_SCHEMA_MAP: Dict[CommandCatalog, type[BaseModel]] = {
     CommandCatalog.GAME_LAUNCH: GameLaunchPayload,
     CommandCatalog.SCREEN_FRAME: ScreenFramePayload,
     CommandCatalog.CAMERA_FRAME: CameraFramePayload,
+    CommandCatalog.MIC_AUDIO_CHUNK: MicAudioChunkPayload,
     CommandCatalog.UNLOCK_PC: UnlockPcPayload,
     CommandCatalog.APPS_LIST: AppsListPayload,
     CommandCatalog.OPEN_URL: OpenUrlPayload,

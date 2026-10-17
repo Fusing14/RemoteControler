@@ -38,6 +38,7 @@ from host.engine.contracts.commands import (
     GameLaunchPayload,
     ScreenFramePayload,
     CameraFramePayload,
+    MicAudioChunkPayload,
     UnlockPcPayload,
     AppsListPayload,
     OpenUrlPayload,
@@ -47,6 +48,7 @@ from host.engine.contracts.envelope import SignedEnvelope
 from host.engine.dispatcher import CommandDispatcher, ExecutionStatus
 from host.engine.handlers.screen import capture_screen_jpeg
 from host.engine.handlers.camera import capture_camera_jpeg, release_camera, CameraManager
+from host.engine.handlers.audio_stream import play_audio_chunk, AudioStreamError, AudioPlayerWorker
 from host.engine.handlers.apps import execute_open_url, execute_app_command
 from host.engine.handlers.unlock import (
     verify_windows_password,
@@ -507,4 +509,68 @@ def test_dispatcher_camera_frame(test_setup):
     assert "height" in result.data
     assert result.data["camera_index"] == 0
     release_camera()
+
+
+def test_mic_audio_chunk_payload_valid():
+    # Payload válido por defecto (16000Hz, mono)
+    raw_bytes = b"\x00\x00" * 1600  # 100ms de silencio
+    b64_audio = base64.b64encode(raw_bytes).decode("ascii")
+
+    payload = MicAudioChunkPayload(audio_b64=b64_audio)
+    assert payload.audio_b64 == b64_audio
+    assert payload.sample_rate == 16000
+    assert payload.channels == 1
+
+    custom_payload = MicAudioChunkPayload(audio_b64=b64_audio, sample_rate=44100, channels=2)
+    assert custom_payload.sample_rate == 44100
+    assert custom_payload.channels == 2
+
+
+def test_mic_audio_chunk_payload_invalid():
+    # Campo vacío
+    with pytest.raises(ValidationError):
+        MicAudioChunkPayload(audio_b64="")
+
+    # sample_rate fuera de rango
+    with pytest.raises(ValidationError):
+        MicAudioChunkPayload(audio_b64="AA==", sample_rate=4000)
+    with pytest.raises(ValidationError):
+        MicAudioChunkPayload(audio_b64="AA==", sample_rate=96000)
+
+    # canales fuera de rango
+    with pytest.raises(ValidationError):
+        MicAudioChunkPayload(audio_b64="AA==", channels=0)
+    with pytest.raises(ValidationError):
+        MicAudioChunkPayload(audio_b64="AA==", channels=3)
+
+
+def test_play_audio_chunk_success():
+    raw_bytes = b"\x00\x00" * 800  # 50ms de audio
+    b64_audio = base64.b64encode(raw_bytes).decode("ascii")
+
+    # Encolar y procesar fragmento sin excepciones
+    play_audio_chunk(b64_audio, sample_rate=16000, channels=1)
+
+
+def test_play_audio_chunk_invalid_base64():
+    with pytest.raises(AudioStreamError):
+        play_audio_chunk("not-valid-base64!@#$%", sample_rate=16000, channels=1)
+
+
+def test_dispatcher_mic_audio_chunk(test_setup):
+    dispatcher = test_setup["dispatcher"]
+    raw_bytes = b"\x00\x00" * 800
+    b64_audio = base64.b64encode(raw_bytes).decode("ascii")
+
+    envelope = create_envelope(
+        setup=test_setup,
+        command_id=CommandCatalog.MIC_AUDIO_CHUNK,
+        payload={"audio_b64": b64_audio, "sample_rate": 16000, "channels": 1}
+    )
+
+    result = dispatcher.dispatch(envelope)
+    assert result.status == ExecutionStatus.SUCCESS
+    assert result.command_id == "MIC_AUDIO_CHUNK"
+    assert result.data == {"played": True}
+
 

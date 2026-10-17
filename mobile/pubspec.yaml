@@ -16,7 +16,6 @@ dependencies:
   http: ^1.2.0
   flutter_secure_storage: ^9.0.0
   mobile_scanner: ^5.1.1
-  ota_update: ^5.0.0
   package_info_plus: ^8.0.0
 
 dev_dependencies:

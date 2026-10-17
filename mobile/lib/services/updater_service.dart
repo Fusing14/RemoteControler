@@ -1,13 +1,32 @@
 /// Servicio de actualización automática dentro de la app (In-App OTA Updater).
-/// Consulta los releases públicos de GitHub y descarga/ejecuta la instalación del APK.
+/// Consulta los releases públicos de GitHub, descarga el APK en streaming y
+/// ejecuta la instalación nativa controlada mediante MethodChannel y FileProvider.
 library;
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:package_info_plus/package_info_plus.dart';
-import 'package:ota_update/ota_update.dart';
+
+/// Estados posibles durante el proceso de actualización OTA.
+enum OtaStatus {
+  DOWNLOADING,
+  INSTALLING,
+  ALREADY_RUNNING_ERROR,
+  PERMISSION_NOT_GRANTED_ERROR,
+  INTERNAL_ERROR,
+}
+
+/// Evento emitido durante la descarga e instalación del APK.
+class OtaEvent {
+  final OtaStatus status;
+  final String? value;
+
+  const OtaEvent(this.status, [this.value]);
+}
 
 class UpdateInfo {
   final bool hasUpdate;
@@ -28,9 +47,12 @@ class UpdateInfo {
 class UpdaterService {
   static const String _defaultReleasesUrl =
       'https://api.github.com/repos/Fusing14/RemoteControler/releases/latest';
+  static const MethodChannel _installerChannel =
+      MethodChannel('com.remotecontroler.securedeck/installer');
 
   final http.Client _httpClient;
   final String _releasesUrl;
+  bool _isUpdating = false;
 
   UpdaterService({
     http.Client? httpClient,
@@ -111,57 +133,118 @@ class UpdaterService {
     );
   }
 
-  /// Inicia la descarga y la instalación nativa del APK mediante FileProvider.
-  /// Envuelto en bloques try-catch asíncronos para evitar cierres inesperados (crashes).
+  /// Descarga el APK en streaming y lanza el instalador nativo seguro.
   Stream<OtaEvent> startOtaUpdate(String downloadUrl) async* {
+    if (_isUpdating) {
+      yield const OtaEvent(
+        OtaStatus.ALREADY_RUNNING_ERROR,
+        'Ya existe una descarga o actualización en curso.',
+      );
+      return;
+    }
+
     final cleanUrl = downloadUrl.trim();
     final uri = Uri.tryParse(cleanUrl);
     if (uri == null || !uri.isScheme('https') || !cleanUrl.toLowerCase().endsWith('.apk')) {
       debugPrint('[UpdaterService] Error: URL de descarga no válida (debe ser HTTPS y terminar en .apk): $cleanUrl');
-      yield OtaEvent(
+      yield const OtaEvent(
         OtaStatus.INTERNAL_ERROR,
         'URL de descarga no válida (se requiere HTTPS terminado en .apk)',
       );
       return;
     }
 
-    debugPrint('[UpdaterService] Invocando OtaUpdate().execute con URL: $cleanUrl');
-    Stream<OtaEvent> otaStream;
-    try {
-      otaStream = OtaUpdate().execute(
-        cleanUrl,
-        destinationFilename: 'app-release.apk',
-      );
-    } catch (e, stackTrace) {
-      debugPrint('[UpdaterService] Excepción síncrona al iniciar OtaUpdate().execute: $e\n$stackTrace');
-      yield OtaEvent(OtaStatus.INTERNAL_ERROR, e.toString());
-      return;
-    }
+    _isUpdating = true;
+    IOSink? sink;
+    File? apkFile;
 
     try {
-      await for (final event in otaStream) {
-        debugPrint('[UpdaterService] OtaEvent: status=${event.status.name}, value=${event.value}');
-        yield event;
-      }
-    } catch (e, stackTrace) {
-      debugPrint('[UpdaterService] Excepción en stream de OtaUpdate: $e\n$stackTrace');
-      final errStr = e.toString().toLowerCase();
-      if (errStr.contains('permission') || errStr.contains('not_granted') || errStr.contains('install')) {
-        yield OtaEvent(
-          OtaStatus.PERMISSION_NOT_GRANTED_ERROR,
-          'Permiso de instalación denegado por el sistema.',
-        );
-      } else if (errStr.contains('already_running') || errStr.contains('running')) {
-        yield OtaEvent(
-          OtaStatus.ALREADY_RUNNING_ERROR,
-          'La actualización ya se encuentra en ejecución.',
-        );
-      } else {
+      yield const OtaEvent(OtaStatus.DOWNLOADING, '0');
+
+      final request = http.Request('GET', uri);
+      request.headers['User-Agent'] = 'RemoteControler-App';
+      final response = await _httpClient.send(request).timeout(const Duration(seconds: 15));
+
+      if (response.statusCode != 200) {
         yield OtaEvent(
           OtaStatus.INTERNAL_ERROR,
-          'Fallo nativo durante la actualización: $e',
+          'Fallo al descargar el archivo de actualización (HTTP ${response.statusCode})',
+        );
+        return;
+      }
+
+      final contentLength = response.contentLength ?? 0;
+      final tempDir = Directory.systemTemp;
+      apkFile = File('${tempDir.path}/securedeck_update.apk');
+
+      if (await apkFile.exists()) {
+        try {
+          await apkFile.delete();
+        } catch (_) {}
+      }
+
+      sink = apkFile.openWrite();
+      var receivedBytes = 0;
+      var lastReportedPercent = -1;
+
+      await for (final chunk in response.stream) {
+        sink.add(chunk);
+        receivedBytes += chunk.length;
+        if (contentLength > 0) {
+          final percent = ((receivedBytes / contentLength) * 100).clamp(0, 100).toInt();
+          if (percent > lastReportedPercent) {
+            lastReportedPercent = percent;
+            yield OtaEvent(OtaStatus.DOWNLOADING, percent.toString());
+          }
+        }
+      }
+
+      await sink.flush();
+      await sink.close();
+      sink = null;
+
+      yield const OtaEvent(OtaStatus.INSTALLING, '100');
+
+      // Invocar el instalador nativo seguro mediante MethodChannel
+      try {
+        final installResult = await _installerChannel.invokeMethod<String>(
+          'installApk',
+          {'filePath': apkFile.path},
+        );
+
+        if (installResult == 'PERMISSION_REQUIRED') {
+          yield const OtaEvent(
+            OtaStatus.PERMISSION_NOT_GRANTED_ERROR,
+            'Permiso requerido para instalar aplicaciones de fuentes desconocidas.',
+          );
+        } else if (installResult == 'INSTALL_STARTED') {
+          yield const OtaEvent(
+            OtaStatus.INSTALLING,
+            'Instalador de Android abierto exitosamente.',
+          );
+        } else {
+          yield OtaEvent(
+            OtaStatus.INTERNAL_ERROR,
+            installResult ?? 'Error al iniciar la instalación nativa.',
+          );
+        }
+      } catch (channelError) {
+        debugPrint('[UpdaterService] Error al invocar canal nativo installer: $channelError');
+        yield OtaEvent(
+          OtaStatus.INTERNAL_ERROR,
+          'Error en el instalador nativo: $channelError',
         );
       }
+    } catch (e, stackTrace) {
+      debugPrint('[UpdaterService] Error en flujo de actualización: $e\n$stackTrace');
+      yield OtaEvent(OtaStatus.INTERNAL_ERROR, e.toString());
+    } finally {
+      if (sink != null) {
+        try {
+          await sink.close();
+        } catch (_) {}
+      }
+      _isUpdating = false;
     }
   }
 

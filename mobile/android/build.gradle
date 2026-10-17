@@ -37,8 +37,6 @@ subprojects { project ->
             if (project.android.namespace == null) {
                 if (packageName != null) {
                     project.android.namespace = packageName
-                } else if (project.name == "ota_update") {
-                    project.android.namespace = "sk.fourq.otaupdate"
                 } else {
                     project.android.namespace = project.group ?: "com.example.${project.name}"
                 }

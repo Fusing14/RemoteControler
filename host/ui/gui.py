@@ -7,6 +7,7 @@ configurar el PIN de desbloqueo, y activar el auto-arranque con Windows.
 
 import logging
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -240,6 +241,22 @@ class HostDashboardApp:
             cursor="hand2",
         )
         btn_pin.pack(side="left", padx=4)
+
+        self.btn_update = tk.Button(
+            btn_row,
+            text="Actualizar Servidor",
+            command=self._on_update_server_clicked,
+            bg="#0D9488",
+            fg="#FFFFFF",
+            activebackground="#0F766E",
+            activeforeground="#FFFFFF",
+            font=("Segoe UI", 9, "bold"),
+            relief="flat",
+            padx=10,
+            pady=6,
+            cursor="hand2",
+        )
+        self.btn_update.pack(side="left", padx=4)
 
         # 3. Tarjeta: Preferencias y Persistencia
         prefs_card = self._create_card(main_container, "Preferencias de Sesión y Arranque")
@@ -567,6 +584,80 @@ class HostDashboardApp:
     def _on_close(self) -> None:
         self._stop_server()
         self.root.destroy()
+
+    def _on_update_server_clicked(self) -> None:
+        """Lanza la verificación y actualización del servidor en un hilo secundario."""
+        def run_update():
+            repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            try:
+                self.btn_update.config(state="disabled", text="Comprobando...")
+
+                # 1. Fetch de cambios en origin main
+                subprocess.run(
+                    ["git", "fetch", "origin", "main"],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                    cwd=repo_root,
+                )
+
+                # 2. Comprobar si HEAD local difiere de origin/main
+                res = subprocess.run(
+                    ["git", "rev-list", "HEAD..origin/main", "--count"],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                    cwd=repo_root,
+                )
+                pending_commits = int(res.stdout.strip() or "0")
+
+                if pending_commits == 0:
+                    self.root.after(
+                        0,
+                        lambda: messagebox.showinfo(
+                            "Actualización",
+                            "El servidor ya está en la última versión.",
+                        ),
+                    )
+                    return
+
+                # 3. Descargar commits e instalar dependencias
+                self.btn_update.config(text="Descargando...")
+                subprocess.run(["git", "pull", "origin", "main"], check=True, cwd=repo_root)
+
+                self.btn_update.config(text="Instalando...")
+                subprocess.run(
+                    [sys.executable, "-m", "pip", "install", "-r", "requirements.txt", "--quiet"],
+                    check=True,
+                    cwd=repo_root,
+                )
+
+                # 4. Confirmar y reiniciar aplicación
+                def restart():
+                    messagebox.showinfo(
+                        "Actualización Exitosa",
+                        "El servidor ha sido actualizado exitosamente.\nLa aplicación se reiniciará ahora.",
+                    )
+                    self._stop_server()
+                    subprocess.Popen([sys.executable] + sys.argv, cwd=repo_root)
+                    self.root.destroy()
+
+                self.root.after(0, restart)
+
+            except Exception as e:
+                logger.error("Error durante la actualización del servidor: %s", e)
+                self.root.after(
+                    0,
+                    lambda err=str(e): messagebox.showerror(
+                        "Error de Actualización",
+                        f"Ocurrió un error al actualizar el servidor:\n{err}",
+                    ),
+                )
+            finally:
+                self.root.after(0, lambda: self.btn_update.config(state="normal", text="Actualizar Servidor"))
+
+        threading.Thread(target=run_update, daemon=True).start()
+
 
 
 def launch_gui(minimized: bool = False, dev_mode: bool = False) -> None:

@@ -13,7 +13,6 @@ import 'camera_viewer_screen.dart';
 import 'games_screen.dart';
 import 'apps_screen.dart';
 import '../../services/updater_service.dart';
-import 'package:ota_update/ota_update.dart';
 
 /// Pantalla principal estilo Stream Deck con cuadrícula táctil reactiva.
 class DeckScreen extends StatefulWidget {
@@ -39,6 +38,12 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
   StreamSubscription<DeckConnectionState>? _stateSubscription;
   DeckConnectionState _connectionState = DeckConnectionState.disconnected;
   final UpdaterService _updaterService = UpdaterService();
+
+  // Estado del micrófono (Intercom en tiempo real)
+  bool _isMicStreaming = false;
+  StreamSubscription? _micStreamSub;
+  static const MethodChannel _micMethodChannel = MethodChannel('com.remotecontroler.securedeck/mic');
+  static const EventChannel _micEventChannel = EventChannel('com.remotecontroler.securedeck/mic_stream');
 
   @override
   void initState() {
@@ -79,10 +84,100 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    _stopMic();
     WidgetsBinding.instance.removeObserver(this);
     _stateSubscription?.cancel();
     _controlClient?.dispose();
     super.dispose();
+  }
+
+  Future<void> _toggleMic() async {
+    if (_isMicStreaming) {
+      await _stopMic();
+    } else {
+      await _startMic();
+    }
+  }
+
+  Future<void> _startMic() async {
+    try {
+      final hasPerm = await _micMethodChannel.invokeMethod<bool>('hasPermission') ?? false;
+      if (!hasPerm) {
+        await _micMethodChannel.invokeMethod('requestPermission');
+        final granted = await _micMethodChannel.invokeMethod<bool>('hasPermission') ?? false;
+        if (!granted) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Permiso de micrófono requerido para transmitir audio.'),
+                backgroundColor: Color(0xFFEF4444),
+              ),
+            );
+          }
+          return;
+        }
+      }
+
+      _micStreamSub = _micEventChannel.receiveBroadcastStream().listen(
+        (chunk) {
+          if (_isMicStreaming && _controlClient != null && chunk is String && chunk.isNotEmpty) {
+            _sendCommand('MIC_AUDIO_CHUNK', {
+              'audio_b64': chunk,
+              'sample_rate': 16000,
+              'channels': 1,
+            });
+          }
+        },
+        onError: (err) {
+          debugPrint('[MicStream] Error: $err');
+          _stopMic();
+        },
+      );
+
+      await _micMethodChannel.invokeMethod('startMic');
+      if (mounted) {
+        setState(() {
+          _isMicStreaming = true;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Micrófono activado. Hablando en vivo al PC...'),
+            backgroundColor: Color(0xFF10B981),
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint('[Mic] Excepción al iniciar micrófono: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al iniciar micrófono: $e'),
+            backgroundColor: const Color(0xFFEF4444),
+          ),
+        );
+      }
+      _stopMic();
+    }
+  }
+
+  Future<void> _stopMic() async {
+    await _micStreamSub?.cancel();
+    _micStreamSub = null;
+    try {
+      await _micMethodChannel.invokeMethod('stopMic');
+    } catch (_) {}
+    if (mounted) {
+      setState(() {
+        _isMicStreaming = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Transmisión de micrófono detenida.'),
+          duration: Duration(seconds: 1),
+        ),
+      );
+    }
   }
 
   @override
@@ -968,6 +1063,16 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
                           ),
                         );
                       }
+                      return Future.value();
+                    },
+                  ),
+                  DeckButton(
+                    label: _isMicStreaming ? 'Micrófono (ON)' : 'Micrófono al PC',
+                    subtitle: _isMicStreaming ? 'Transmitiendo en vivo' : 'Intercom / Walkie-Talkie',
+                    icon: _isMicStreaming ? Icons.mic_rounded : Icons.mic_none_rounded,
+                    accentColor: _isMicStreaming ? const Color(0xFFEF4444) : const Color(0xFFEC4899), // Rojo si activo / Rosa
+                    onPressed: () {
+                      _toggleMic();
                       return Future.value();
                     },
                   ),

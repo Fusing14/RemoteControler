@@ -80,5 +80,14 @@ void main() {
       // Verificamos que el mockClient y la URL funcionen sin excepciones
       expect(updater, isNotNull);
     });
+
+    test('Instancia OtaStatus y OtaEvent correctamente', () {
+      const event = OtaEvent(OtaStatus.DOWNLOADING, '50');
+      expect(event.status, equals(OtaStatus.DOWNLOADING));
+      expect(event.value, equals('50'));
+
+      const installEvent = OtaEvent(OtaStatus.INSTALLING, '100');
+      expect(installEvent.status, equals(OtaStatus.INSTALLING));
+    });
   });
 }
