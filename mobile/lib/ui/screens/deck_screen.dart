@@ -7,6 +7,8 @@ import '../../protocol/envelope_builder.dart';
 import '../../crypto/key_manager.dart';
 import '../widgets/deck_button.dart';
 import 'scanner_screen.dart';
+import '../../services/updater_service.dart';
+import 'package:ota_update/ota_update.dart';
 
 /// Pantalla principal estilo Stream Deck con cuadrícula táctil reactiva.
 class DeckScreen extends StatefulWidget {
@@ -31,12 +33,14 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
   RemoteControlClient? _controlClient;
   StreamSubscription<DeckConnectionState>? _stateSubscription;
   DeckConnectionState _connectionState = DeckConnectionState.disconnected;
+  final UpdaterService _updaterService = UpdaterService();
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _initControlClient();
+    _checkForUpdates(silent: true);
   }
 
   Future<void> _initControlClient() async {
@@ -191,6 +195,257 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
     );
   }
 
+  Future<void> _checkForUpdates({bool silent = false}) async {
+    try {
+      if (!silent && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            backgroundColor: Color(0xFF1E2230),
+            content: Text(
+              'Buscando actualizaciones...',
+              style: TextStyle(color: Colors.white),
+            ),
+            duration: Duration(seconds: 1),
+          ),
+        );
+      }
+
+      final info = await _updaterService.checkForUpdate();
+      if (!mounted) return;
+
+      if (info.hasUpdate) {
+        _showUpdateDialog(info);
+      } else if (!silent) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            backgroundColor: const Color(0xFF10B981),
+            content: Text(
+              'Ya tienes la versión más reciente (v${info.currentVersion})',
+              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+            ),
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+    } catch (e) {
+      if (!silent && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            backgroundColor: const Color(0xFFEF4444),
+            content: Text(
+              'Error al buscar actualizaciones: ${e.toString().replaceAll('Exception: ', '')}',
+              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+            ),
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    }
+  }
+
+  void _showUpdateDialog(UpdateInfo info) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF161A23),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Row(
+          children: [
+            Icon(Icons.system_update_alt, color: Color(0xFF6366F1), size: 28),
+            SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                'Actualización Disponible',
+                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18),
+              ),
+            ),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: const Color(0xFF0F1117),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    'Actual: v${info.currentVersion}',
+                    style: const TextStyle(color: Colors.white60, fontSize: 13),
+                  ),
+                  const Icon(Icons.arrow_forward, color: Color(0xFF6366F1), size: 16),
+                  Text(
+                    'Nueva: v${info.latestVersion}',
+                    style: const TextStyle(
+                      color: Color(0xFF10B981),
+                      fontWeight: FontWeight.bold,
+                      fontSize: 13,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (info.releaseNotes != null && info.releaseNotes!.trim().isNotEmpty) ...[
+              const SizedBox(height: 14),
+              const Text(
+                'Notas de la versión:',
+                style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w600, fontSize: 12),
+              ),
+              const SizedBox(height: 6),
+              Container(
+                constraints: const BoxConstraints(maxHeight: 140),
+                width: double.infinity,
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF0F1117),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: SingleChildScrollView(
+                  child: Text(
+                    info.releaseNotes!,
+                    style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 12),
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Más tarde', style: TextStyle(color: Colors.white54)),
+          ),
+          ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF6366F1),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            icon: const Icon(Icons.download, size: 18, color: Colors.white),
+            label: const Text('Actualizar ahora', style: TextStyle(color: Colors.white)),
+            onPressed: () {
+              Navigator.pop(ctx);
+              if (info.downloadUrl != null) {
+                _startDownloadAndInstall(info.downloadUrl!);
+              }
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _startDownloadAndInstall(String downloadUrl) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogCtx) {
+        double progress = 0.0;
+        String statusText = 'Iniciando descarga...';
+        bool hasError = false;
+        StreamSubscription<OtaEvent>? otaSub;
+
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            otaSub ??= _updaterService.startOtaUpdate(downloadUrl).listen(
+              (event) {
+                switch (event.status) {
+                  case OtaStatus.DOWNLOADING:
+                    final val = int.tryParse(event.value ?? '0') ?? 0;
+                    setModalState(() {
+                      progress = val / 100.0;
+                      statusText = 'Descargando: $val%';
+                    });
+                    break;
+                  case OtaStatus.INSTALLING:
+                    setModalState(() {
+                      statusText = 'Abriendo instalador de Android...';
+                    });
+                    Future.delayed(const Duration(seconds: 1), () {
+                      if (dialogCtx.mounted) {
+                        Navigator.of(dialogCtx, rootNavigator: true).pop();
+                      }
+                    });
+                    break;
+                  case OtaStatus.PERMISSION_NOT_GRANTED_OR_UNEXPECTED_ERROR:
+                    setModalState(() {
+                      hasError = true;
+                      statusText = 'Permiso denegado para instalar APKs. Habilítalo en Ajustes.';
+                    });
+                    break;
+                  case OtaStatus.ALREADY_RUNNING_OR_ERROR:
+                  case OtaStatus.INTERNAL_ERROR:
+                  case OtaStatus.CHECKSUM_ERROR:
+                    setModalState(() {
+                      hasError = true;
+                      statusText = 'Error en la actualización (${event.status.name})';
+                    });
+                    break;
+                }
+              },
+              onError: (err) {
+                setModalState(() {
+                  hasError = true;
+                  statusText = 'Error: $err';
+                });
+              },
+            );
+
+            return AlertDialog(
+              backgroundColor: const Color(0xFF161A23),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              title: const Row(
+                children: [
+                  Icon(Icons.system_update_alt, color: Color(0xFF6366F1)),
+                  SizedBox(width: 12),
+                  Text(
+                    'Instalando actualización',
+                    style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                  ),
+                ],
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    statusText,
+                    style: TextStyle(
+                      color: hasError ? const Color(0xFFEF4444) : const Color(0xFFCBD5E1),
+                      fontSize: 13,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  LinearProgressIndicator(
+                    value: (progress > 0 && progress <= 1.0 && !hasError) ? progress : null,
+                    backgroundColor: const Color(0xFF0F1117),
+                    valueColor: AlwaysStoppedAnimation<Color>(
+                      hasError ? const Color(0xFFEF4444) : const Color(0xFF6366F1),
+                    ),
+                  ),
+                ],
+              ),
+              actions: [
+                if (hasError)
+                  TextButton(
+                    onPressed: () {
+                      otaSub?.cancel();
+                      Navigator.of(dialogCtx, rootNavigator: true).pop();
+                    },
+                    child: const Text('Cerrar', style: TextStyle(color: Colors.white54)),
+                  ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
   Widget _buildStatusIndicator() {
     Color color;
     String label;
@@ -247,6 +502,11 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
         elevation: 0,
         title: _buildStatusIndicator(),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.system_update, color: Color(0xFF6366F1)),
+            tooltip: 'Buscar actualizaciones',
+            onPressed: () => _checkForUpdates(silent: false),
+          ),
           IconButton(
             icon: const Icon(Icons.refresh, color: Colors.white70),
             tooltip: 'Reconectar',
