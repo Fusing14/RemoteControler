@@ -27,14 +27,17 @@ void main() {
       hostKeyPair = await ed25519.newKeyPair();
       final pubKey = await hostKeyPair.extractPublicKey();
       hostPubBytes = pubKey.bytes;
-      hostPubHex = hostPubBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+      hostPubHex =
+          hostPubBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
 
       final sha256 = Sha256();
       final digest = await sha256.hash(hostPubBytes);
-      hostDeviceId = digest.bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+      hostDeviceId =
+          digest.bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
     });
 
-    Future<String> createValidQrJson({int? customExpiresAt, String? customToken}) async {
+    Future<String> createValidQrJson(
+        {int? customExpiresAt, String? customToken}) async {
       final expiresAt = customExpiresAt ??
           ((DateTime.now().toUtc().millisecondsSinceEpoch ~/ 1000) + 180);
       final token = customToken ?? 'valid_pairing_token_123';
@@ -87,13 +90,15 @@ void main() {
       expect(endpoint, equals('100.85.12.34:8443'));
 
       // Verificar que el endpoint y host_device_id quedaron persistidos
-      expect(await pairingClient.getPairedEndpoint(), equals('100.85.12.34:8443'));
+      expect(
+          await pairingClient.getPairedEndpoint(), equals('100.85.12.34:8443'));
       expect(await pairingClient.getPairedHostDeviceId(), equals(hostDeviceId));
     });
 
     test('Rechazo si el código QR ha expirado', () async {
       // Expiró hace 20 segundos
-      final expiredTime = (DateTime.now().toUtc().millisecondsSinceEpoch ~/ 1000) - 20;
+      final expiredTime =
+          (DateTime.now().toUtc().millisecondsSinceEpoch ~/ 1000) - 20;
       final qrString = await createValidQrJson(customExpiresAt: expiredTime);
 
       final pairingClient = PairingClient(
@@ -111,7 +116,9 @@ void main() {
       );
     });
 
-    test('Rechazo si la firma digital del Host ha sido manipulada (Anti-Spoofing)', () async {
+    test(
+        'Rechazo si la firma digital del Host ha sido manipulada (Anti-Spoofing)',
+        () async {
       final qrString = await createValidQrJson();
       final map = json.decode(qrString) as Map<String, dynamic>;
 

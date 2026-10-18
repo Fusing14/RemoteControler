@@ -18,7 +18,7 @@ class EnvelopeBuilder {
         _secureRandom = secureRandom ?? Random.secure();
 
   /// Construye y firma un SignedEnvelope listo para transmitirse por WebSocket.
-  /// 
+  ///
   /// Mitigación de Vectores de Ataque:
   /// 1. Replay Attacks: Genera un nonce único CSPRNG de 16 bytes y timestamp UTC actual.
   /// 2. Tampering: Sella el mensaje con firma Ed25519 sobre el diccionario canónico JCS.
@@ -28,7 +28,8 @@ class EnvelopeBuilder {
     int? customTimestamp,
     String? customNonce,
   }) async {
-    final timestampUtc = customTimestamp ?? (DateTime.now().toUtc().millisecondsSinceEpoch ~/ 1000);
+    final timestampUtc = customTimestamp ??
+        (DateTime.now().toUtc().millisecondsSinceEpoch ~/ 1000);
     // Nonce de 32 caracteres hexadecimales (16 bytes de entropía segura CSPRNG)
     final nonce = customNonce ?? _generateSecureNonce();
 

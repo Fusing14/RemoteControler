@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'crypto/key_manager.dart';
 import 'services/secure_storage_adapter.dart';
 import 'services/pairing_client.dart';
+import 'services/saved_hosts_service.dart';
 import 'ui/screens/scanner_screen.dart';
 import 'ui/screens/deck_screen.dart';
 
@@ -14,13 +15,18 @@ void main() async {
   final keyManager = KeyManager(storage: storage);
   await keyManager.ensureInitialized();
 
-  // 2. Comprobar si ya existe un Host previamente vinculado
+  // 2. Comprobar si ya existen ordenadores previamente vinculados
+  final savedHostsService = SavedHostsService(storage: storage);
+  await savedHostsService.ensureInitialized();
+  final activeHost = await savedHostsService.getActiveHost();
+
   final pairingClient = PairingClient(
     keyManager: keyManager,
     storage: storage,
   );
 
-  final pairedEndpoint = await pairingClient.getPairedEndpoint();
+  final pairedEndpoint =
+      activeHost?.endpoint ?? await pairingClient.getPairedEndpoint();
 
   runApp(SecureDeckApp(
     keyManager: keyManager,

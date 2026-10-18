@@ -58,7 +58,8 @@ class KeyManager {
         _sha256 = sha256 ?? Sha256();
 
   /// Comprueba si el gestor criptográfico ha completado su inicialización.
-  bool get isInitialized => _keyPair != null && _deviceId != null && _publicKeyBytes != null;
+  bool get isInitialized =>
+      _keyPair != null && _deviceId != null && _publicKeyBytes != null;
 
   /// Asegura de forma asíncrona e idempotente que las claves estén cargadas o generadas.
   Future<void> ensureInitialized() async {
@@ -108,7 +109,8 @@ class KeyManager {
   /// Retorna el fingerprint SHA-256 determinista del dispositivo móvil (64 caracteres hex).
   String get deviceId {
     if (_deviceId == null) {
-      throw const SecurityStorageException('KeyManager no ha sido inicializado.');
+      throw const SecurityStorageException(
+          'KeyManager no ha sido inicializado.');
     }
     return _deviceId!;
   }
@@ -116,7 +118,8 @@ class KeyManager {
   /// Retorna los 32 bytes crudos de la clave pública Ed25519.
   List<int> get publicKeyBytes {
     if (_publicKeyBytes == null) {
-      throw const SecurityStorageException('KeyManager no ha sido inicializado.');
+      throw const SecurityStorageException(
+          'KeyManager no ha sido inicializado.');
     }
     return List.unmodifiable(_publicKeyBytes!);
   }
@@ -132,7 +135,8 @@ class KeyManager {
       await ensureInitialized();
     }
     if (_keyPair == null) {
-      throw const SecurityStorageException('KeyManager no ha sido inicializado.');
+      throw const SecurityStorageException(
+          'KeyManager no ha sido inicializado.');
     }
 
     // 1. Canonicalización determinista RFC 8785

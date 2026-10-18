@@ -58,7 +58,8 @@ class _GamesScreenState extends State<GamesScreen> {
       } else {
         if (mounted) {
           setState(() {
-            _errorMessage = res['message'] as String? ?? 'No se pudieron listar los juegos.';
+            _errorMessage = res['message'] as String? ??
+                'No se pudieron listar los juegos.';
             _isLoading = false;
           });
         }
@@ -98,13 +99,15 @@ class _GamesScreenState extends State<GamesScreen> {
               backgroundColor: const Color(0xFF10B981),
               content: Text(
                 'Lanzando $gameName en el PC...',
-                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                style: const TextStyle(
+                    color: Colors.white, fontWeight: FontWeight.bold),
               ),
               duration: const Duration(seconds: 2),
             ),
           );
         } else {
-          throw Exception(res['message'] ?? 'Fallo al lanzar el juego en el PC.');
+          throw Exception(
+              res['message'] ?? 'Fallo al lanzar el juego en el PC.');
         }
       }
     } catch (e) {
@@ -114,7 +117,8 @@ class _GamesScreenState extends State<GamesScreen> {
             backgroundColor: const Color(0xFFEF4444),
             content: Text(
               'Error al lanzar: ${e.toString().replaceAll('Exception: ', '')}',
-              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+              style: const TextStyle(
+                  color: Colors.white, fontWeight: FontWeight.w600),
             ),
             duration: const Duration(seconds: 3),
           ),
@@ -132,8 +136,10 @@ class _GamesScreenState extends State<GamesScreen> {
       final name = (game['name'] as String? ?? '').toLowerCase();
       final plat = (game['platform'] as String? ?? '').toUpperCase();
 
-      final matchesQuery = _searchQuery.isEmpty || name.contains(_searchQuery.toLowerCase());
-      final matchesPlatform = _platformFilter == 'ALL' || plat == _platformFilter;
+      final matchesQuery =
+          _searchQuery.isEmpty || name.contains(_searchQuery.toLowerCase());
+      final matchesPlatform =
+          _platformFilter == 'ALL' || plat == _platformFilter;
 
       return matchesQuery && matchesPlatform;
     }).toList();
@@ -153,7 +159,10 @@ class _GamesScreenState extends State<GamesScreen> {
           children: [
             const Text(
               'Juegos Instalados',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white),
+              style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white),
             ),
             if (!_isLoading)
               Text(
@@ -180,15 +189,19 @@ class _GamesScreenState extends State<GamesScreen> {
               child: Column(
                 children: [
                   TextField(
-                    onChanged: (val) => setState(() => _searchQuery = val.trim()),
+                    onChanged: (val) =>
+                        setState(() => _searchQuery = val.trim()),
                     style: const TextStyle(color: Colors.white, fontSize: 14),
                     decoration: InputDecoration(
                       hintText: 'Buscar juego por título...',
-                      hintStyle: const TextStyle(color: Colors.white38, fontSize: 14),
-                      prefixIcon: const Icon(Icons.search, color: Colors.white54, size: 20),
+                      hintStyle:
+                          const TextStyle(color: Colors.white38, fontSize: 14),
+                      prefixIcon: const Icon(Icons.search,
+                          color: Colors.white54, size: 20),
                       filled: true,
                       fillColor: const Color(0xFF161A23),
-                      contentPadding: const EdgeInsets.symmetric(vertical: 0, horizontal: 16),
+                      contentPadding: const EdgeInsets.symmetric(
+                          vertical: 0, horizontal: 16),
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(10),
                         borderSide: BorderSide.none,
@@ -218,7 +231,8 @@ class _GamesScreenState extends State<GamesScreen> {
                         children: [
                           CircularProgressIndicator(color: Color(0xFF10B981)),
                           SizedBox(height: 16),
-                          Text('Escaneando discos del PC...', style: TextStyle(color: Colors.white70)),
+                          Text('Escaneando discos del PC...',
+                              style: TextStyle(color: Colors.white70)),
                         ],
                       ),
                     )
@@ -229,7 +243,8 @@ class _GamesScreenState extends State<GamesScreen> {
                             child: Column(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                const Icon(Icons.error_outline, size: 48, color: Color(0xFFEF4444)),
+                                const Icon(Icons.error_outline,
+                                    size: 48, color: Color(0xFFEF4444)),
                                 const SizedBox(height: 12),
                                 Text(
                                   _errorMessage!,
@@ -238,9 +253,12 @@ class _GamesScreenState extends State<GamesScreen> {
                                 ),
                                 const SizedBox(height: 16),
                                 ElevatedButton.icon(
-                                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF10B981)),
-                                  icon: const Icon(Icons.refresh, color: Colors.white),
-                                  label: const Text('Reintentar', style: TextStyle(color: Colors.white)),
+                                  style: ElevatedButton.styleFrom(
+                                      backgroundColor: const Color(0xFF10B981)),
+                                  icon: const Icon(Icons.refresh,
+                                      color: Colors.white),
+                                  label: const Text('Reintentar',
+                                      style: TextStyle(color: Colors.white)),
                                   onPressed: _loadGames,
                                 ),
                               ],
@@ -251,17 +269,22 @@ class _GamesScreenState extends State<GamesScreen> {
                           ? const Center(
                               child: Text(
                                 'No se encontraron juegos con ese filtro.',
-                                style: TextStyle(color: Colors.white54, fontSize: 14),
+                                style: TextStyle(
+                                    color: Colors.white54, fontSize: 14),
                               ),
                             )
                           : ListView.separated(
                               padding: const EdgeInsets.all(16),
                               itemCount: filtered.length,
-                              separatorBuilder: (_, __) => const SizedBox(height: 10),
+                              separatorBuilder: (_, __) =>
+                                  const SizedBox(height: 10),
                               itemBuilder: (ctx, index) {
                                 final game = filtered[index];
-                                final isSteam = (game['platform'] as String?)?.toLowerCase() == 'steam';
-                                final cardId = game['id'] as String? ?? game['game_id'];
+                                final isSteam = (game['platform'] as String?)
+                                        ?.toLowerCase() ==
+                                    'steam';
+                                final cardId =
+                                    game['id'] as String? ?? game['game_id'];
                                 final isLaunching = _launchingGameId == cardId;
 
                                 return Container(
@@ -269,7 +292,8 @@ class _GamesScreenState extends State<GamesScreen> {
                                   decoration: BoxDecoration(
                                     color: const Color(0xFF161A23),
                                     borderRadius: BorderRadius.circular(12),
-                                    border: Border.all(color: const Color(0xFF1E2230)),
+                                    border: Border.all(
+                                        color: const Color(0xFF1E2230)),
                                   ),
                                   child: Row(
                                     children: [
@@ -277,19 +301,27 @@ class _GamesScreenState extends State<GamesScreen> {
                                         width: 44,
                                         height: 44,
                                         decoration: BoxDecoration(
-                                          color: isSteam ? const Color(0xFF171A21) : const Color(0xFF2B2B2B),
-                                          borderRadius: BorderRadius.circular(10),
+                                          color: isSteam
+                                              ? const Color(0xFF171A21)
+                                              : const Color(0xFF2B2B2B),
+                                          borderRadius:
+                                              BorderRadius.circular(10),
                                         ),
                                         child: Icon(
-                                          isSteam ? Icons.sports_esports_rounded : Icons.flash_on_rounded,
-                                          color: isSteam ? const Color(0xFF66C0F4) : const Color(0xFF0078F2),
+                                          isSteam
+                                              ? Icons.sports_esports_rounded
+                                              : Icons.flash_on_rounded,
+                                          color: isSteam
+                                              ? const Color(0xFF66C0F4)
+                                              : const Color(0xFF0078F2),
                                           size: 24,
                                         ),
                                       ),
                                       const SizedBox(width: 12),
                                       Expanded(
                                         child: Column(
-                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
                                           children: [
                                             Text(
                                               game['name'] ?? 'Desconocido',
@@ -305,26 +337,44 @@ class _GamesScreenState extends State<GamesScreen> {
                                             Row(
                                               children: [
                                                 Container(
-                                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                                  padding: const EdgeInsets
+                                                      .symmetric(
+                                                      horizontal: 6,
+                                                      vertical: 2),
                                                   decoration: BoxDecoration(
                                                     color: isSteam
-                                                        ? const Color(0xFF66C0F4).withOpacity(0.15)
-                                                        : const Color(0xFF0078F2).withOpacity(0.15),
-                                                    borderRadius: BorderRadius.circular(4),
+                                                        ? const Color(
+                                                                0xFF66C0F4)
+                                                            .withOpacity(0.15)
+                                                        : const Color(
+                                                                0xFF0078F2)
+                                                            .withOpacity(0.15),
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                            4),
                                                   ),
                                                   child: Text(
-                                                    isSteam ? 'STEAM' : 'EPIC GAMES',
+                                                    isSteam
+                                                        ? 'STEAM'
+                                                        : 'EPIC GAMES',
                                                     style: TextStyle(
-                                                      color: isSteam ? const Color(0xFF66C0F4) : const Color(0xFF3B82F6),
+                                                      color: isSteam
+                                                          ? const Color(
+                                                              0xFF66C0F4)
+                                                          : const Color(
+                                                              0xFF3B82F6),
                                                       fontSize: 10,
-                                                      fontWeight: FontWeight.w700,
+                                                      fontWeight:
+                                                          FontWeight.w700,
                                                     ),
                                                   ),
                                                 ),
                                                 const SizedBox(width: 8),
                                                 Text(
                                                   'ID: ${game['game_id']}',
-                                                  style: const TextStyle(color: Colors.white38, fontSize: 11),
+                                                  style: const TextStyle(
+                                                      color: Colors.white38,
+                                                      fontSize: 11),
                                                 ),
                                               ],
                                             ),
@@ -334,25 +384,40 @@ class _GamesScreenState extends State<GamesScreen> {
                                       const SizedBox(width: 10),
                                       ElevatedButton(
                                         style: ElevatedButton.styleFrom(
-                                          backgroundColor: const Color(0xFF10B981),
-                                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                          backgroundColor:
+                                              const Color(0xFF10B981),
+                                          padding: const EdgeInsets.symmetric(
+                                              horizontal: 14, vertical: 10),
+                                          shape: RoundedRectangleBorder(
+                                              borderRadius:
+                                                  BorderRadius.circular(8)),
                                         ),
-                                        onPressed: isLaunching ? null : () => _launchGame(game),
+                                        onPressed: isLaunching
+                                            ? null
+                                            : () => _launchGame(game),
                                         child: isLaunching
                                             ? const SizedBox(
                                                 width: 16,
                                                 height: 16,
-                                                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                                                child:
+                                                    CircularProgressIndicator(
+                                                        strokeWidth: 2,
+                                                        color: Colors.white),
                                               )
                                             : const Row(
                                                 mainAxisSize: MainAxisSize.min,
                                                 children: [
-                                                  Icon(Icons.play_arrow, size: 16, color: Colors.white),
+                                                  Icon(Icons.play_arrow,
+                                                      size: 16,
+                                                      color: Colors.white),
                                                   SizedBox(width: 4),
                                                   Text(
                                                     'Jugar',
-                                                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12),
+                                                    style: TextStyle(
+                                                        color: Colors.white,
+                                                        fontWeight:
+                                                            FontWeight.bold,
+                                                        fontSize: 12),
                                                   ),
                                                 ],
                                               ),
@@ -379,7 +444,8 @@ class _GamesScreenState extends State<GamesScreen> {
           color: isSelected ? const Color(0xFF6366F1) : const Color(0xFF161A23),
           borderRadius: BorderRadius.circular(8),
           border: Border.all(
-            color: isSelected ? const Color(0xFF6366F1) : const Color(0xFF1E2230),
+            color:
+                isSelected ? const Color(0xFF6366F1) : const Color(0xFF1E2230),
           ),
         ),
         child: Text(

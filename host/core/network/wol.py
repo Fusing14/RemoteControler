@@ -216,6 +216,7 @@ def get_primary_adapter_info() -> Dict[str, Any]:
                 "mac": norm_mac,
                 "broadcast_ip": bcast,
                 "ipv4": ipv4,
+                "lan_ip": ipv4,
                 "description": selected.get("description", "Adaptador Físico"),
             }
 
@@ -224,7 +225,83 @@ def get_primary_adapter_info() -> Dict[str, Any]:
         "mac": "00:11:22:33:44:55",
         "broadcast_ip": "255.255.255.255",
         "ipv4": "127.0.0.1",
+        "lan_ip": "127.0.0.1",
         "description": "Adaptador de prueba",
+    }
+
+
+def configure_windows_wol() -> Dict[str, Any]:
+    """
+    Configura Windows para soportar Wake-on-LAN en frío (Cold Boot):
+    1. Deshabilita Inicio Rápido (HiberbootEnabled = 0), permitiendo que la tarjeta de red
+       permanezca alimentada en estado de apagado S5.
+    2. Habilita 'Wake on Magic Packet' en los adaptadores físicos de red mediante PowerShell.
+    """
+    if sys.platform != "win32":
+        return {
+            "success": True,
+            "hiberboot_disabled": True,
+            "adapters_configured": True,
+            "message": "Configuración simulada para entorno no-Windows.",
+        }
+
+    hiber_ok = False
+    adapters_ok = False
+    messages = []
+
+    # 1. Deshabilitar Fast Startup en Registro HKLM
+    try:
+        reg_cmd = [
+            "reg.exe",
+            "add",
+            r"HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Power",
+            "/v",
+            "HiberbootEnabled",
+            "/t",
+            "REG_DWORD",
+            "/d",
+            "0",
+            "/f",
+        ]
+        res = subprocess.run(reg_cmd, capture_output=True, text=True, timeout=5)
+        if res.returncode == 0:
+            hiber_ok = True
+            messages.append("Inicio Rápido (Fast Startup / Hiberboot) deshabilitado.")
+        else:
+            messages.append(f"No se pudo deshabilitar Fast Startup (requiere Administrador): {res.stderr.strip()}")
+    except Exception as e:
+        messages.append(f"Error al modificar HiberbootEnabled: {e}")
+
+    # 2. Configurar adaptadores de red físicos
+    try:
+        ps_code = """
+        Get-NetAdapter | Where-Object {
+            $_.InterfaceDescription -notmatch 'Virtual|Tailscale|VPN|Hyper-V|Loopback|Docker|vEthernet'
+        } | ForEach-Object {
+            Set-NetAdapterPowerManagement -Name $_.Name -WakeOnMagicPacket Enabled -ErrorAction SilentlyContinue
+            Set-NetAdapterAdvancedProperty -Name $_.Name -DisplayName '*Wake*' -DisplayValue 'Enabled' -ErrorAction SilentlyContinue
+        }
+        """
+        res = subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_code],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        if res.returncode == 0:
+            adapters_ok = True
+            messages.append("Wake-on-Magic-Packet activado en adaptadores de red físicos.")
+        else:
+            messages.append(f"Fallo al configurar adaptadores de red: {res.stderr.strip()}")
+    except Exception as e:
+        messages.append(f"Error ejecutando PowerShell para adaptadores WoL: {e}")
+
+    overall_success = hiber_ok or adapters_ok
+    return {
+        "success": overall_success,
+        "hiberboot_disabled": hiber_ok,
+        "adapters_configured": adapters_ok,
+        "message": " | ".join(messages),
     }
 
 

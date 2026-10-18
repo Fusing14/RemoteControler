@@ -9,6 +9,7 @@ import 'package:cryptography/cryptography.dart';
 
 import '../crypto/key_manager.dart';
 import '../crypto/canonical.dart';
+import 'saved_hosts_service.dart';
 
 class PairingClient {
   static const String keyPairedEndpoint = 'rc_paired_endpoint_v1';
@@ -151,6 +152,17 @@ class PairingClient {
       await _storage.write(
           keyPairedBroadcastIp, challenge['broadcast_ip'] as String);
     }
+
+    // 5. Registrar en el gestor multi-PC
+    try {
+      final hostsService = SavedHostsService(storage: _storage);
+      await hostsService.addOrUpdateHost(
+        endpoint: endpoint,
+        deviceId: challenge['host_device_id'] as String,
+        macAddress: challenge['mac_address'] as String?,
+        broadcastIp: challenge['broadcast_ip'] as String?,
+      );
+    } catch (_) {}
 
     return endpoint;
   }

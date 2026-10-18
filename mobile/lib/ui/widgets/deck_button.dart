@@ -22,7 +22,8 @@ class DeckButton extends StatefulWidget {
   State<DeckButton> createState() => _DeckButtonState();
 }
 
-class _DeckButtonState extends State<DeckButton> with SingleTickerProviderStateMixin {
+class _DeckButtonState extends State<DeckButton>
+    with SingleTickerProviderStateMixin {
   bool _isPressed = false;
   bool _isLoading = false;
   bool _isError = false;
@@ -58,7 +59,8 @@ class _DeckButtonState extends State<DeckButton> with SingleTickerProviderStateM
 
   @override
   Widget build(BuildContext context) {
-    final effectiveColor = _isError ? const Color(0xFFEF4444) : widget.accentColor;
+    final effectiveColor =
+        _isError ? const Color(0xFFEF4444) : widget.accentColor;
 
     return GestureDetector(
       onTapDown: (_) => setState(() => _isPressed = true),
@@ -103,7 +105,8 @@ class _DeckButtonState extends State<DeckButton> with SingleTickerProviderStateM
                   ),
                 ),
                 Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -118,7 +121,8 @@ class _DeckButtonState extends State<DeckButton> with SingleTickerProviderStateM
                                   height: 34,
                                   child: CircularProgressIndicator(
                                     strokeWidth: 3,
-                                    valueColor: AlwaysStoppedAnimation<Color>(effectiveColor),
+                                    valueColor: AlwaysStoppedAnimation<Color>(
+                                        effectiveColor),
                                   ),
                                 )
                               : Icon(

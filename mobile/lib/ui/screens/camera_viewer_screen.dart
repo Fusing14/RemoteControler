@@ -28,7 +28,8 @@ class _CameraViewerScreenState extends State<CameraViewerScreen> {
   bool _isLoading = true;
   String? _errorMessage;
   int _cameraIndex = 0;
-  final TransformationController _transformationController = TransformationController();
+  final TransformationController _transformationController =
+      TransformationController();
 
   @override
   void initState() {
@@ -84,7 +85,8 @@ class _CameraViewerScreenState extends State<CameraViewerScreen> {
         } else {
           if (mounted) {
             setState(() {
-              _errorMessage = res['message'] as String? ?? 'Error al capturar webcam.';
+              _errorMessage =
+                  res['message'] as String? ?? 'Error al capturar webcam.';
               _isLoading = false;
             });
           }
@@ -135,12 +137,18 @@ class _CameraViewerScreenState extends State<CameraViewerScreen> {
           children: [
             Text(
               'Webcam en Vivo (Cam $_cameraIndex)',
-              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.white),
+              style: const TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white),
             ),
             if (!_isLoading && _errorMessage == null)
               Text(
                 '$_fps FPS • ${_latencyMs}ms',
-                style: const TextStyle(fontSize: 11, color: Color(0xFF14B8A6), fontWeight: FontWeight.w600),
+                style: const TextStyle(
+                    fontSize: 11,
+                    color: Color(0xFF14B8A6),
+                    fontWeight: FontWeight.w600),
               ),
           ],
         ),
@@ -157,10 +165,13 @@ class _CameraViewerScreenState extends State<CameraViewerScreen> {
           ),
           IconButton(
             icon: Icon(
-              _isStreaming ? Icons.pause_circle_outline : Icons.play_circle_outline,
+              _isStreaming
+                  ? Icons.pause_circle_outline
+                  : Icons.play_circle_outline,
               color: _isStreaming ? const Color(0xFF14B8A6) : Colors.white70,
             ),
-            tooltip: _isStreaming ? 'Pausar transmisión' : 'Reanudar transmisión',
+            tooltip:
+                _isStreaming ? 'Pausar transmisión' : 'Reanudar transmisión',
             onPressed: () {
               setState(() {
                 _isStreaming = !_isStreaming;
@@ -192,18 +203,23 @@ class _CameraViewerScreenState extends State<CameraViewerScreen> {
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          const Icon(Icons.videocam_off_rounded, size: 48, color: Color(0xFFEF4444)),
+                          const Icon(Icons.videocam_off_rounded,
+                              size: 48, color: Color(0xFFEF4444)),
                           const SizedBox(height: 12),
                           Text(
                             _errorMessage!,
                             textAlign: TextAlign.center,
-                            style: const TextStyle(color: Colors.white, fontSize: 14),
+                            style: const TextStyle(
+                                color: Colors.white, fontSize: 14),
                           ),
                           const SizedBox(height: 16),
                           ElevatedButton.icon(
-                            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF14B8A6)),
-                            icon: const Icon(Icons.refresh, color: Colors.white),
-                            label: const Text('Reintentar', style: TextStyle(color: Colors.white)),
+                            style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFF14B8A6)),
+                            icon:
+                                const Icon(Icons.refresh, color: Colors.white),
+                            label: const Text('Reintentar',
+                                style: TextStyle(color: Colors.white)),
                             onPressed: () {
                               setState(() {
                                 _isLoading = true;

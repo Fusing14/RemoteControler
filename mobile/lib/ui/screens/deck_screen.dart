@@ -14,6 +14,8 @@ import 'games_screen.dart';
 import 'apps_screen.dart';
 import '../../services/updater_service.dart';
 import '../../services/wol_service.dart';
+import '../../services/saved_hosts_service.dart';
+import 'hosts_manager_screen.dart';
 
 /// Pantalla principal estilo Stream Deck con cuadrícula táctil reactiva.
 class DeckScreen extends StatefulWidget {
@@ -39,6 +41,10 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
   StreamSubscription<DeckConnectionState>? _stateSubscription;
   DeckConnectionState _connectionState = DeckConnectionState.disconnected;
   final UpdaterService _updaterService = UpdaterService();
+  late final SavedHostsService _savedHostsService =
+      SavedHostsService(storage: widget.pairingClient.storage);
+  late String _currentEndpoint = widget.hostEndpoint;
+  Timer? _updateTimer;
 
   // Estado del micrófono (Intercom en tiempo real)
   bool _isMicStreaming = false;
@@ -51,19 +57,31 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
+    _currentEndpoint = widget.hostEndpoint;
     WidgetsBinding.instance.addObserver(this);
-    _initControlClient();
+    _savedHostsService.ensureInitialized();
+    _initControlClient(_currentEndpoint);
     _checkForUpdates(silent: true);
+    _updateTimer = Timer.periodic(
+      const Duration(minutes: 30),
+      (_) => _checkForUpdates(silent: true),
+    );
   }
 
-  Future<void> _initControlClient() async {
+  Future<void> _initControlClient([String? endpoint]) async {
+    final targetEndpoint = endpoint ?? _currentEndpoint;
+    _currentEndpoint = targetEndpoint;
+
     final km = widget.keyManager ?? widget.pairingClient.keyManager;
     await km.ensureInitialized();
 
     final builder = EnvelopeBuilder(keyManager: km);
 
+    await _stateSubscription?.cancel();
+    _controlClient?.dispose();
+
     final client = RemoteControlClient(
-      hostEndpoint: widget.hostEndpoint,
+      hostEndpoint: targetEndpoint,
       envelopeBuilder: builder,
       allowLoopback: widget.allowLoopback,
     );
@@ -88,8 +106,32 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
     await client.connect();
   }
 
+  Future<void> _openHostsManager() async {
+    final selectedHost = await Navigator.of(context).push<SavedHost>(
+      MaterialPageRoute(
+        builder: (_) => HostsManagerScreen(
+          savedHostsService: _savedHostsService,
+          pairingClient: widget.pairingClient,
+          keyManager: widget.keyManager ?? widget.pairingClient.keyManager,
+          currentActiveEndpoint: _currentEndpoint,
+        ),
+      ),
+    );
+
+    if (selectedHost != null &&
+        selectedHost.endpoint.isNotEmpty &&
+        selectedHost.endpoint != _currentEndpoint &&
+        mounted) {
+      setState(() {
+        _currentEndpoint = selectedHost.endpoint;
+      });
+      await _initControlClient(selectedHost.endpoint);
+    }
+  }
+
   @override
   void dispose() {
+    _updateTimer?.cancel();
     _stopMic();
     WidgetsBinding.instance.removeObserver(this);
     _stateSubscription?.cancel();
@@ -200,6 +242,7 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _controlClient?.ensureConnected();
+      _checkForUpdates(silent: true);
     }
   }
 
@@ -608,7 +651,7 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
       await WolService.wake(
         macAddress: mac,
         broadcastIp: bcast,
-        hostIpOrEndpoint: widget.hostEndpoint,
+        hostIpOrEndpoint: _currentEndpoint,
       );
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -667,7 +710,11 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
       if (!mounted) return;
 
       if (info.hasUpdate) {
-        _showUpdateDialog(info);
+        if (silent) {
+          await _updaterService.showUpdateNotification(info);
+        } else {
+          _showUpdateDialog(info);
+        }
       } else if (!silent) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -1004,7 +1051,7 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
     switch (_connectionState) {
       case DeckConnectionState.connected:
         color = const Color(0xFF10B981); // Verde esmeralda
-        label = widget.hostEndpoint;
+        label = _currentEndpoint;
         break;
       case DeckConnectionState.connecting:
       case DeckConnectionState.reconnecting:
@@ -1057,7 +1104,12 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
         title: _buildStatusIndicator(),
         actions: [
           IconButton(
-            icon: const Icon(Icons.system_update, color: Color(0xFF6366F1)),
+            icon: const Icon(Icons.devices_rounded, color: Color(0xFF6366F1)),
+            tooltip: 'Mis Ordenadores',
+            onPressed: _openHostsManager,
+          ),
+          IconButton(
+            icon: const Icon(Icons.system_update, color: Colors.white70),
             tooltip: 'Buscar actualizaciones',
             onPressed: () => _checkForUpdates(silent: false),
           ),

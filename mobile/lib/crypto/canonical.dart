@@ -1,6 +1,6 @@
 /// Implementación de JSON Canonicalization Scheme (JCS) - RFC 8785 en Dart.
 /// Garantiza representación byte a byte idéntica a la implementación en Python.
-/// 
+///
 /// Reglas aplicadas:
 /// 1. Claves ordenadas lexicográficamente por unidades de código UTF-16.
 /// 2. Sin espacios en blanco entre separadores (',' y ':').
@@ -64,6 +64,7 @@ String _serializeJcs(dynamic obj) {
     buffer.write('}');
     return buffer.toString();
   } else {
-    throw FormatException('Tipo de dato no serializable para JCS: ${obj.runtimeType}');
+    throw FormatException(
+        'Tipo de dato no serializable para JCS: ${obj.runtimeType}');
   }
 }

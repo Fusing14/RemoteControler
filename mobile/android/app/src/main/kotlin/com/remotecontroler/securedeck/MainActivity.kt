@@ -13,6 +13,11 @@ import android.util.Base64
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.Context
+import androidx.core.app.NotificationCompat
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
@@ -25,6 +30,8 @@ class MainActivity : FlutterActivity() {
         private const val INSTALLER_CHANNEL = "com.remotecontroler.securedeck/installer"
         private const val MIC_METHOD_CHANNEL = "com.remotecontroler.securedeck/mic"
         private const val MIC_EVENT_CHANNEL = "com.remotecontroler.securedeck/mic_stream"
+        private const val UPDATER_METHOD_CHANNEL = "com.remotecontroler.securedeck/updater"
+        private const val NOTIFICATION_CHANNEL_ID = "securedeck_updates"
         private const val RECORD_AUDIO_REQ_CODE = 2001
     }
 
@@ -141,6 +148,55 @@ class MainActivity : FlutterActivity() {
                 }
             }
         )
+
+        // 4. Canal de notificaciones nativas de actualización
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, UPDATER_METHOD_CHANNEL).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "showUpdateNotification" -> {
+                    val title = call.argument<String>("title") ?: "Actualización disponible"
+                    val message = call.argument<String>("message") ?: "Hay una nueva versión de SecureDeck"
+                    showNativeUpdateNotification(title, message)
+                    result.success(true)
+                }
+                else -> result.notImplemented()
+            }
+        }
+    }
+
+    private fun showNativeUpdateNotification(title: String, message: String) {
+        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                NOTIFICATION_CHANNEL_ID,
+                "Actualizaciones de SecureDeck",
+                NotificationManager.IMPORTANCE_DEFAULT
+            ).apply {
+                description = "Notificaciones de nuevas versiones de la aplicación"
+            }
+            notificationManager.createNotificationChannel(channel)
+        }
+
+        val intent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        } else {
+            PendingIntent.FLAG_UPDATE_CURRENT
+        }
+        val pendingIntent = PendingIntent.getActivity(this, 0, intent, flags)
+
+        val notification = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.stat_sys_download_done)
+            .setContentTitle(title)
+            .setContentText(message)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(message))
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setContentIntent(pendingIntent)
+            .setAutoCancel(true)
+            .build()
+
+        notificationManager.notify(1001, notification)
     }
 
     @Synchronized

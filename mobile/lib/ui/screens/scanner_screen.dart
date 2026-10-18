@@ -53,11 +53,13 @@ class _ScannerScreenState extends State<ScannerScreen> {
     HapticFeedback.mediumImpact();
 
     try {
-      final pairedEndpoint = await widget.pairingClient.pairWithQrContent(rawValue);
+      final pairedEndpoint =
+          await widget.pairingClient.pairWithQrContent(rawValue);
 
       if (mounted) {
         HapticFeedback.heavyImpact();
-        final initializedKeyManager = widget.keyManager ?? widget.pairingClient.keyManager;
+        final initializedKeyManager =
+            widget.keyManager ?? widget.pairingClient.keyManager;
         await initializedKeyManager.ensureInitialized();
 
         Navigator.of(context).pushReplacement(
@@ -73,7 +75,8 @@ class _ScannerScreenState extends State<ScannerScreen> {
     } catch (e) {
       if (mounted) {
         setState(() {
-          _errorMessage = e.toString().replaceFirst('SecurityStorageException: ', '');
+          _errorMessage =
+              e.toString().replaceFirst('SecurityStorageException: ', '');
           _isProcessing = false;
         });
         HapticFeedback.vibrate();
@@ -119,7 +122,8 @@ class _ScannerScreenState extends State<ScannerScreen> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
+            child:
+                const Text('Cancelar', style: TextStyle(color: Colors.white54)),
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
@@ -134,7 +138,8 @@ class _ScannerScreenState extends State<ScannerScreen> {
                 );
               }
             },
-            child: const Text('Vincular', style: TextStyle(color: Colors.white)),
+            child:
+                const Text('Vincular', style: TextStyle(color: Colors.white)),
           ),
         ],
       ),
@@ -211,7 +216,8 @@ class _ScannerScreenState extends State<ScannerScreen> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     CircularProgressIndicator(
-                      valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF6366F1)),
+                      valueColor:
+                          AlwaysStoppedAnimation<Color>(Color(0xFF6366F1)),
                     ),
                     SizedBox(height: 16),
                     Text(
@@ -236,7 +242,8 @@ class _ScannerScreenState extends State<ScannerScreen> {
               children: [
                 if (_errorMessage != null) ...[
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 12),
                     margin: const EdgeInsets.only(bottom: 16),
                     decoration: BoxDecoration(
                       color: const Color(0xFFEF4444).withOpacity(0.9),
@@ -267,7 +274,8 @@ class _ScannerScreenState extends State<ScannerScreen> {
                   style: OutlinedButton.styleFrom(
                     foregroundColor: Colors.white,
                     side: const BorderSide(color: Color(0xFF334155)),
-                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 20, vertical: 12),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),
                     ),

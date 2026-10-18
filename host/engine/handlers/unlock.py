@@ -48,6 +48,19 @@ def relaunch_as_admin() -> bool:
         return False
     try:
         import ctypes
+        project_root = Path(__file__).resolve().parent.parent.parent.parent
+        bat_path = project_root / "Iniciar_SecureDeck.bat"
+        if bat_path.exists():
+            ret = ctypes.windll.shell32.ShellExecuteW(
+                None,
+                "runas",
+                str(bat_path),
+                " ".join(f'"{arg}"' for arg in sys.argv[1:]).strip(),
+                str(project_root),
+                1,
+            )
+            return ret > 32
+
         params = " ".join(f'"{arg}"' for arg in sys.argv[1:])
         cmd_file = sys.argv[0]
         ret = ctypes.windll.shell32.ShellExecuteW(
@@ -55,7 +68,7 @@ def relaunch_as_admin() -> bool:
             "runas",
             sys.executable,
             f'"{cmd_file}" {params}'.strip(),
-            None,
+            str(project_root),
             1,
         )
         return ret > 32
@@ -232,14 +245,25 @@ def execute_unlock_pc(password_or_pin: str, username: Optional[str] = None) -> N
 
         user32 = ctypes.windll.user32
 
-        # 1. Despertar monitores (SendMessageW a HWND_BROADCAST con SC_MONITORPOWER y -1)
+        # 1. Despertar monitores y pantalla (SC_MONITORPOWER y movimiento/clic de ratón)
         HWND_BROADCAST = 0xFFFF
         WM_SYSCOMMAND = 0x0112
         SC_MONITORPOWER = 0xF170
         user32.SendMessageW(HWND_BROADCAST, WM_SYSCOMMAND, SC_MONITORPOWER, -1)
-        time.sleep(0.3)
+        time.sleep(0.15)
 
-        # 2. Mecanismo primario: Desbloqueo directo de sesión mediante tscon.exe (si tiene privilegios de admin/SYSTEM)
+        MOUSEEVENTF_MOVE = 0x0001
+        MOUSEEVENTF_LEFTDOWN = 0x0002
+        MOUSEEVENTF_LEFTUP = 0x0004
+        user32.mouse_event(MOUSEEVENTF_MOVE, 1, 1, 0, 0)
+        time.sleep(0.05)
+        user32.mouse_event(MOUSEEVENTF_MOVE, -1, -1, 0, 0)
+        time.sleep(0.05)
+        user32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+        user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+        time.sleep(0.2)
+
+        # 2. Mecanismo primario: Desbloqueo directo de sesión mediante tscon.exe
         session_id = get_current_session_id()
         system_root = os.environ.get("SystemRoot", r"C:\Windows")
         tscon_path = os.path.join(system_root, "System32", "tscon.exe")
@@ -250,10 +274,40 @@ def execute_unlock_pc(password_or_pin: str, username: Optional[str] = None) -> N
                 logger.info("Intentando desbloqueo rápido de sesión mediante tscon.exe (Sesión %d)...", session_id)
                 res = subprocess.run([tscon_path, str(session_id), "/dest:console"], capture_output=True, timeout=5)
                 if res.returncode == 0:
-                    logger.info("Sesión desbloqueada exitosamente mediante tscon.exe.")
+                    logger.info("Sesión desbloqueada exitosamente mediante tscon.exe directo.")
                     tscon_success = True
-                else:
-                    logger.debug("tscon devolvió código %d: %s", res.returncode, res.stderr.decode(errors="ignore"))
+                elif is_elevated_admin():
+                    # Intento bajo cuenta SYSTEM mediante tarea efímera
+                    logger.info("tscon directo denegado. Intentando bajo cuenta SYSTEM vía schtasks...")
+                    task_cmd = f'cmd.exe /c ""{tscon_path}"" {session_id} /dest:console'
+                    create_res = subprocess.run(
+                        [
+                            "schtasks",
+                            "/Create",
+                            "/TN",
+                            "SecureDeckTscon",
+                            "/TR",
+                            task_cmd,
+                            "/SC",
+                            "ONCE",
+                            "/ST",
+                            "00:00",
+                            "/RU",
+                            "NT AUTHORITY\\SYSTEM",
+                            "/RL",
+                            "HIGHEST",
+                            "/F",
+                        ],
+                        capture_output=True,
+                        text=True,
+                        timeout=5,
+                    )
+                    if create_res.returncode == 0:
+                        subprocess.run(["schtasks", "/Run", "/TN", "SecureDeckTscon"], capture_output=True, timeout=5)
+                        time.sleep(0.4)
+                        subprocess.run(["schtasks", "/Delete", "/TN", "SecureDeckTscon", "/F"], capture_output=True, timeout=5)
+                        logger.info("Sesión desbloqueada exitosamente mediante tscon bajo SYSTEM.")
+                        tscon_success = True
             except Exception as ex:
                 logger.debug("Fallo al invocar tscon.exe: %s", ex)
 
@@ -273,10 +327,13 @@ def execute_unlock_pc(password_or_pin: str, username: Optional[str] = None) -> N
             logger.debug("No se pudo acoplar el hilo al escritorio Winlogon: %s", ex)
 
         try:
-            # Levantar la cortina de la pantalla de bloqueo (Escape + Space, esperar 900ms para Win 11)
+            # Levantar la cortina de la pantalla de bloqueo (Escape + Space)
             VK_ESCAPE = 0x1B
             VK_SPACE = 0x20
             VK_RETURN = 0x0D
+            VK_CONTROL = 0x11
+            VK_A = 0x41
+            VK_BACK = 0x08
             KEYEVENTF_KEYUP = 0x0002
             KEYEVENTF_UNICODE = 0x0004
 
@@ -284,17 +341,31 @@ def execute_unlock_pc(password_or_pin: str, username: Optional[str] = None) -> N
             sc_esc = user32.MapVirtualKeyW(VK_ESCAPE, 0)
             user32.keybd_event(VK_ESCAPE, sc_esc, 0, 0)
             user32.keybd_event(VK_ESCAPE, sc_esc, KEYEVENTF_KEYUP, 0)
-            time.sleep(0.15)
+            time.sleep(0.1)
 
             # Space
             sc_space = user32.MapVirtualKeyW(VK_SPACE, 0)
             user32.keybd_event(VK_SPACE, sc_space, 0, 0)
             user32.keybd_event(VK_SPACE, sc_space, KEYEVENTF_KEYUP, 0)
 
-            # Esperar a que la cortina suba completamente y el campo de PIN adquiera foco (950ms en Windows 11/10)
-            time.sleep(0.95)
+            # Esperar a que la cortina suba completamente (1100ms para Windows 11)
+            time.sleep(1.1)
 
-            # Inyectar caracteres de credencial usando scan codes de hardware
+            # Limpiar campo de texto con Ctrl+A -> Backspace
+            sc_ctrl = user32.MapVirtualKeyW(VK_CONTROL, 0)
+            sc_a = user32.MapVirtualKeyW(VK_A, 0)
+            sc_back = user32.MapVirtualKeyW(VK_BACK, 0)
+
+            user32.keybd_event(VK_CONTROL, sc_ctrl, 0, 0)
+            user32.keybd_event(VK_A, sc_a, 0, 0)
+            user32.keybd_event(VK_A, sc_a, KEYEVENTF_KEYUP, 0)
+            user32.keybd_event(VK_CONTROL, sc_ctrl, KEYEVENTF_KEYUP, 0)
+            time.sleep(0.05)
+            user32.keybd_event(VK_BACK, sc_back, 0, 0)
+            user32.keybd_event(VK_BACK, sc_back, KEYEVENTF_KEYUP, 0)
+            time.sleep(0.08)
+
+            # Inyectar caracteres de credencial usando scan codes de hardware con 60ms entre pulsaciones
             for ch in password_or_pin:
                 vk_scan = user32.VkKeyScanW(ord(ch))
                 vk = vk_scan & 0xFF
@@ -319,7 +390,7 @@ def execute_unlock_pc(password_or_pin: str, username: Optional[str] = None) -> N
                     user32.keybd_event(0, code, KEYEVENTF_UNICODE, 0)
                     user32.keybd_event(0, code, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP, 0)
 
-                time.sleep(0.02)
+                time.sleep(0.06)
 
             time.sleep(0.1)
 

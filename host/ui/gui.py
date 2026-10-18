@@ -33,7 +33,17 @@ from host.engine.handlers.unlock import (
     is_elevated_admin,
     relaunch_as_admin,
 )
-from host.core.network.wol import get_primary_physical_mac, get_broadcast_ip
+from host.core.autostart import (
+    is_autostart_enabled,
+    enable_autostart,
+    disable_autostart,
+    create_desktop_shortcut,
+)
+from host.core.network.wol import (
+    get_primary_physical_mac,
+    get_broadcast_ip,
+    configure_windows_wol,
+)
 from host.transport.network_utils import get_tailscale_ip, validate_bind_address
 from host.transport.server import create_app
 
@@ -314,7 +324,7 @@ class HostDashboardApp:
         )
         chk_keep.pack(anchor="w", padx=14, pady=6)
 
-        self.var_auto_start = tk.BooleanVar(value=self.config.auto_start)
+        self.var_auto_start = tk.BooleanVar(value=is_autostart_enabled() or self.config.auto_start)
         chk_autostart = ttk.Checkbutton(
             prefs_card,
             text="Iniciar automáticamente al encender el PC (Inicio minimizado)",
@@ -322,7 +332,42 @@ class HostDashboardApp:
             command=self._on_auto_start_toggle,
             style="Card.TCheckbutton",
         )
-        chk_autostart.pack(anchor="w", padx=14, pady=(0, 12))
+        chk_autostart.pack(anchor="w", padx=14, pady=(0, 10))
+
+        prefs_btn_row = ttk.Frame(prefs_card, style="Card.TFrame")
+        prefs_btn_row.pack(fill="x", padx=14, pady=(0, 12))
+
+        btn_shortcut = tk.Button(
+            prefs_btn_row,
+            text="📌 Crear Acceso Directo en Escritorio",
+            command=self._create_desktop_shortcut,
+            bg="#1E2230",
+            fg=TEXT_PRIMARY,
+            activebackground="#2A3144",
+            activeforeground="#FFFFFF",
+            font=("Segoe UI", 9),
+            relief="flat",
+            padx=10,
+            pady=4,
+            cursor="hand2",
+        )
+        btn_shortcut.pack(side="left", padx=(0, 8))
+
+        btn_wol = tk.Button(
+            prefs_btn_row,
+            text="⚡ Configurar Placa/Red (WoL)",
+            command=self._configure_wol,
+            bg="#1E2230",
+            fg=TEXT_PRIMARY,
+            activebackground="#2A3144",
+            activeforeground="#FFFFFF",
+            font=("Segoe UI", 9),
+            relief="flat",
+            padx=10,
+            pady=4,
+            cursor="hand2",
+        )
+        btn_wol.pack(side="left")
 
         # 4. Tarjeta: Dispositivos Móviles Autorizados
         devices_card = self._create_card(main_container, "Teléfonos y Dispositivos Vinculados")
@@ -432,7 +477,52 @@ class HostDashboardApp:
     def _on_auto_start_toggle(self) -> None:
         val = self.var_auto_start.get()
         self.config.auto_start = val
-        logger.info("Opción 'auto_start' actualizada a %s", val)
+        if val:
+            ok = enable_autostart(minimized=True)
+            if ok:
+                logger.info("Auto-arranque de Windows habilitado correctamente.")
+            else:
+                logger.warning("No se pudo configurar completamente el auto-arranque.")
+        else:
+            disable_autostart()
+            logger.info("Auto-arranque de Windows deshabilitado.")
+
+    def _create_desktop_shortcut(self) -> None:
+        try:
+            lnk = create_desktop_shortcut()
+            messagebox.showinfo(
+                "Acceso Directo Creado",
+                f"Se ha creado el acceso directo exitosamente en el Escritorio:\n\n{lnk}\n\nPuedes iniciar SecureDeck con permisos elevados haciendo doble clic en él.",
+                parent=self.root,
+            )
+        except Exception as e:
+            messagebox.showerror(
+                "Error al Crear Acceso Directo",
+                f"Ocurrió un error al crear el acceso directo:\n{e}",
+                parent=self.root,
+            )
+
+    def _configure_wol(self) -> None:
+        try:
+            res = configure_windows_wol()
+            if res.get("success"):
+                messagebox.showinfo(
+                    "Configuración Wake-on-LAN",
+                    f"Configuración completada exitosamente:\n\n{res.get('message')}",
+                    parent=self.root,
+                )
+            else:
+                messagebox.showwarning(
+                    "Configuración Wake-on-LAN Parcial",
+                    f"Atención:\n\n{res.get('message')}\n\nPara deshabilitar el Inicio Rápido (Fast Startup), ejecuta RemoteControler como Administrador.",
+                    parent=self.root,
+                )
+        except Exception as e:
+            messagebox.showerror(
+                "Error en Configuración WoL",
+                f"Ocurrió un error al configurar la tarjeta de red:\n{e}",
+                parent=self.root,
+            )
 
     def _show_pin_dialog(self) -> None:
         dlg = tk.Toplevel(self.root)

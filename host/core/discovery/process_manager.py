@@ -62,6 +62,11 @@ class AppCloseSecurityError(AppCloseError):
     pass
 
 
+try:
+    import psutil
+except ImportError:
+    psutil = None
+
 TH32CS_SNAPPROCESS = 0x00000002
 
 
@@ -87,9 +92,52 @@ if sys.platform == "win32":
             ("dwFlags", wintypes.DWORD),
             ("szExeFile", ctypes.c_wchar * 260),
         ]
+
+    user32 = ctypes.windll.user32
+    kernel32 = ctypes.windll.kernel32
+    dwmapi = ctypes.windll.dwmapi
+
+    # Prototipos 64-bit seguros para evitar truncamiento de punteros HWND
+    user32.IsWindowVisible.argtypes = [wintypes.HWND]
+    user32.IsWindowVisible.restype = wintypes.BOOL
+
+    user32.GetWindowTextLengthW.argtypes = [wintypes.HWND]
+    user32.GetWindowTextLengthW.restype = ctypes.c_int
+
+    user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+    user32.GetWindowTextW.restype = ctypes.c_int
+
+    if hasattr(user32, "GetWindowLongPtrW"):
+        user32.GetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int]
+        user32.GetWindowLongPtrW.restype = ctypes.c_ssize_t
+        _get_window_long = user32.GetWindowLongPtrW
+    else:
+        user32.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
+        user32.GetWindowLongW.restype = wintypes.LONG
+        _get_window_long = user32.GetWindowLongW
+
+    user32.GetWindow.argtypes = [wintypes.HWND, wintypes.UINT]
+    user32.GetWindow.restype = wintypes.HWND
+
+    user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(RECT)]
+    user32.GetWindowRect.restype = wintypes.BOOL
+
+    user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+    user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+
+    user32.GetForegroundWindow.argtypes = []
+    user32.GetForegroundWindow.restype = wintypes.HWND
+
+    WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    user32.EnumWindows.argtypes = [WNDENUMPROC, wintypes.LPARAM]
+    user32.EnumWindows.restype = wintypes.BOOL
+
+    dwmapi.DwmGetWindowAttribute.argtypes = [wintypes.HWND, wintypes.DWORD, wintypes.LPCVOID, wintypes.DWORD]
+    dwmapi.DwmGetWindowAttribute.restype = ctypes.HRESULT
 else:
     RECT = None  # type: ignore
     PROCESSENTRY32 = None  # type: ignore
+    _get_window_long = None  # type: ignore
 
 
 def get_process_name_by_pid(pid: int) -> str:
@@ -97,8 +145,16 @@ def get_process_name_by_pid(pid: int) -> str:
     if sys.platform != "win32":
         return "mock_app.exe"
 
+    if psutil is not None:
+        try:
+            p = psutil.Process(pid)
+            name = p.name()
+            if name:
+                return name
+        except Exception:
+            pass
+
     kernel32 = ctypes.windll.kernel32
-    # PROCESS_QUERY_LIMITED_INFORMATION (0x1000) funciona incluso sin privilegios de administrador
     h_proc = kernel32.OpenProcess(0x1000, False, pid)
     if not h_proc:
         return "Unknown"
@@ -178,7 +234,7 @@ def list_running_apps() -> List[Dict[str, Any]]:
             WS_EX_TOOLWINDOW = 0x00000080
             WS_EX_APPWINDOW = 0x00040000
             WS_EX_TRANSPARENT = 0x00000020
-            ex_style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+            ex_style = _get_window_long(hwnd, GWL_EXSTYLE)
             if (ex_style & WS_EX_TOOLWINDOW) and not (ex_style & WS_EX_APPWINDOW):
                 return True
             if ex_style & WS_EX_TRANSPARENT:
@@ -187,7 +243,7 @@ def list_running_apps() -> List[Dict[str, Any]]:
             # Comprobar ventana propietaria (GW_OWNER = 4)
             GW_OWNER = 4
             owner = user32.GetWindow(hwnd, GW_OWNER)
-            if owner != 0 and not (ex_style & WS_EX_APPWINDOW):
+            if bool(owner) and not (ex_style & WS_EX_APPWINDOW):
                 # Es una ventana modal o popup secundario, no la ventana principal de la barra de tareas
                 return True
 
@@ -230,13 +286,33 @@ def list_running_apps() -> List[Dict[str, Any]]:
 
         return True
 
-    WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
     cb_func = WNDENUMPROC(enum_cb)
 
-    if h_input:
-        user32.EnumDesktopWindows(h_input, cb_func, 0)
-    else:
-        user32.EnumWindows(cb_func, 0)
+    # Enumerar ventanas del escritorio interactivo (funciona en procesos consola y GUI)
+    h_desk = None
+    try:
+        h_desk = user32.OpenInputDesktop(0, False, 0x0100)
+        if not h_desk:
+            h_desk = user32.OpenDesktopW("Default", 0, False, 0x0100)
+        if not h_desk:
+            h_desk = user32.GetThreadDesktop(kernel32.GetCurrentThreadId())
+        if h_desk:
+            user32.EnumDesktopWindows(h_desk, cb_func, 0)
+    except Exception as ex:
+        logger.debug("Fallo al enumerar ventanas con EnumDesktopWindows: %s", ex)
+    finally:
+        if h_desk:
+            try:
+                user32.CloseDesktop(h_desk)
+            except Exception:
+                pass
+
+    # Fallback si no se obtuvieron ventanas
+    if not raw_apps:
+        try:
+            user32.EnumWindows(cb_func, 0)
+        except Exception as ex:
+            logger.debug("Fallo al enumerar ventanas con EnumWindows: %s", ex)
 
     # Deduplicar estrictamente por nombre de ejecutable (name.lower())
     # manteniendo la ventana en primer plano o la que tenga el título más descriptivo
@@ -261,44 +337,73 @@ def list_running_apps() -> List[Dict[str, Any]]:
     # Enumerar procesos en segundo plano de la sesión de usuario
     background_apps: List[Dict[str, Any]] = []
     my_pid = os.getpid()
-    my_sid = wintypes.DWORD()
-    kernel32.ProcessIdToSessionId(my_pid, ctypes.byref(my_sid))
 
-    h_snap = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
-    if h_snap and h_snap != -1:
+    if psutil is not None:
         try:
-            pe = PROCESSENTRY32()
-            pe.dwSize = ctypes.sizeof(PROCESSENTRY32)
-            if kernel32.Process32FirstW(h_snap, ctypes.byref(pe)):
-                while True:
-                    p_id = int(pe.th32ProcessID)
-                    exe_name = str(pe.szExeFile)
+            for proc in psutil.process_iter(["pid", "name"]):
+                try:
+                    p_id = int(proc.info["pid"])
+                    exe_name = str(proc.info["name"] or "")
+                    if not exe_name or p_id <= 4 or p_id == my_pid:
+                        continue
                     lower_name = exe_name.lower()
-
                     if (
-                        p_id > 4
-                        and p_id != my_pid
-                        and lower_name not in PROTECTED_PROCESS_NAMES
+                        lower_name not in PROTECTED_PROCESS_NAMES
                         and lower_name not in IGNORED_WINDOW_NAMES
                         and p_id not in primary_pids
                         and lower_name not in primary_names
                     ):
-                        proc_sid = wintypes.DWORD()
-                        if kernel32.ProcessIdToSessionId(p_id, ctypes.byref(proc_sid)):
-                            if proc_sid.value == my_sid.value:
-                                background_apps.append({
-                                    "pid": p_id,
-                                    "name": exe_name,
-                                    "title": exe_name,
-                                    "hwnd": 0,
-                                    "category": "background",
-                                    "is_foreground": False,
-                                })
+                        background_apps.append({
+                            "pid": p_id,
+                            "name": exe_name,
+                            "title": exe_name,
+                            "hwnd": 0,
+                            "category": "background",
+                            "is_foreground": False,
+                        })
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+        except Exception as ex:
+            logger.debug("Error en psutil.process_iter: %s", ex)
+    else:
+        # Fallback Toolhelp32
+        my_sid = wintypes.DWORD()
+        kernel32.ProcessIdToSessionId(my_pid, ctypes.byref(my_sid))
+        h_snap = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+        if h_snap and h_snap != -1:
+            try:
+                pe = PROCESSENTRY32()
+                pe.dwSize = ctypes.sizeof(PROCESSENTRY32)
+                if kernel32.Process32FirstW(h_snap, ctypes.byref(pe)):
+                    while True:
+                        p_id = int(pe.th32ProcessID)
+                        exe_name = str(pe.szExeFile)
+                        lower_name = exe_name.lower()
 
-                    if not kernel32.Process32NextW(h_snap, ctypes.byref(pe)):
-                        break
-        finally:
-            kernel32.CloseHandle(h_snap)
+                        if (
+                            p_id > 4
+                            and p_id != my_pid
+                            and lower_name not in PROTECTED_PROCESS_NAMES
+                            and lower_name not in IGNORED_WINDOW_NAMES
+                            and p_id not in primary_pids
+                            and lower_name not in primary_names
+                        ):
+                            proc_sid = wintypes.DWORD()
+                            if kernel32.ProcessIdToSessionId(p_id, ctypes.byref(proc_sid)):
+                                if proc_sid.value == my_sid.value:
+                                    background_apps.append({
+                                        "pid": p_id,
+                                        "name": exe_name,
+                                        "title": exe_name,
+                                        "hwnd": 0,
+                                        "category": "background",
+                                        "is_foreground": False,
+                                    })
+
+                        if not kernel32.Process32NextW(h_snap, ctypes.byref(pe)):
+                            break
+            finally:
+                kernel32.CloseHandle(h_snap)
 
     by_bg_name: Dict[str, Dict[str, Any]] = {}
     for bg_app in background_apps:

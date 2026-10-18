@@ -49,6 +49,8 @@ class UpdaterService {
       'https://api.github.com/repos/Fusing14/RemoteControler/releases/latest';
   static const MethodChannel _installerChannel =
       MethodChannel('com.remotecontroler.securedeck/installer');
+  static const MethodChannel _updaterChannel =
+      MethodChannel('com.remotecontroler.securedeck/updater');
 
   final http.Client _httpClient;
   final String _releasesUrl;
@@ -60,6 +62,21 @@ class UpdaterService {
   })  : _httpClient = httpClient ?? http.Client(),
         _releasesUrl = releasesUrl ?? _defaultReleasesUrl;
 
+  /// Muestra una notificación nativa en el sistema informando de la actualización disponible.
+  Future<void> showUpdateNotification(UpdateInfo info) async {
+    if (!Platform.isAndroid || !info.hasUpdate) return;
+    try {
+      await _updaterChannel.invokeMethod('showUpdateNotification', {
+        'title': 'Actualización disponible (v${info.latestVersion})',
+        'message':
+            'Una nueva versión de SecureDeck está disponible para instalar.',
+        'downloadUrl': info.downloadUrl,
+      });
+    } catch (e) {
+      debugPrint('[UpdaterService] No se pudo mostrar notificación nativa: $e');
+    }
+  }
+
   /// Consulta la versión instalada y la compara con la última publicada en GitHub Releases.
   Future<UpdateInfo> checkForUpdate() async {
     final packageInfo = await PackageInfo.fromPlatform();
@@ -69,7 +86,8 @@ class UpdaterService {
         ? '$currentVersion+$currentBuild'
         : currentVersion;
 
-    debugPrint('[UpdaterService] Comprobando actualizaciones... Versión instalada: $fullCurrent');
+    debugPrint(
+        '[UpdaterService] Comprobando actualizaciones... Versión instalada: $fullCurrent');
 
     final response = await _httpClient.get(
       Uri.parse(_releasesUrl),
@@ -99,7 +117,8 @@ class UpdaterService {
         final url = asset['browser_download_url'] as String? ?? '';
         if (name == 'app-release.apk' && url.startsWith('https://')) {
           apkDownloadUrl = url;
-          debugPrint('[UpdaterService] Encontrado asset oficial app-release.apk: $url');
+          debugPrint(
+              '[UpdaterService] Encontrado asset oficial app-release.apk: $url');
           break;
         }
       }
@@ -111,18 +130,22 @@ class UpdaterService {
         if (asset is Map<String, dynamic>) {
           final name = asset['name'] as String? ?? '';
           final url = asset['browser_download_url'] as String? ?? '';
-          if (name.toLowerCase().endsWith('.apk') && url.startsWith('https://')) {
+          if (name.toLowerCase().endsWith('.apk') &&
+              url.startsWith('https://')) {
             apkDownloadUrl = url;
-            debugPrint('[UpdaterService] Encontrado asset APK alternativo: $name ($url)');
+            debugPrint(
+                '[UpdaterService] Encontrado asset APK alternativo: $name ($url)');
             break;
           }
         }
       }
     }
 
-    final hasUpdate = isNewerVersion(tagName, currentVersion) && apkDownloadUrl != null;
+    final hasUpdate =
+        isNewerVersion(tagName, currentVersion) && apkDownloadUrl != null;
 
-    debugPrint('[UpdaterService] Resultado: instalada=$currentVersion, última=$tagName, hasUpdate=$hasUpdate, url=$apkDownloadUrl');
+    debugPrint(
+        '[UpdaterService] Resultado: instalada=$currentVersion, última=$tagName, hasUpdate=$hasUpdate, url=$apkDownloadUrl');
 
     return UpdateInfo(
       hasUpdate: hasUpdate,
@@ -145,8 +168,11 @@ class UpdaterService {
 
     final cleanUrl = downloadUrl.trim();
     final uri = Uri.tryParse(cleanUrl);
-    if (uri == null || !uri.isScheme('https') || !cleanUrl.toLowerCase().endsWith('.apk')) {
-      debugPrint('[UpdaterService] Error: URL de descarga no válida (debe ser HTTPS y terminar en .apk): $cleanUrl');
+    if (uri == null ||
+        !uri.isScheme('https') ||
+        !cleanUrl.toLowerCase().endsWith('.apk')) {
+      debugPrint(
+          '[UpdaterService] Error: URL de descarga no válida (debe ser HTTPS y terminar en .apk): $cleanUrl');
       yield const OtaEvent(
         OtaStatus.INTERNAL_ERROR,
         'URL de descarga no válida (se requiere HTTPS terminado en .apk)',
@@ -163,7 +189,8 @@ class UpdaterService {
 
       final request = http.Request('GET', uri);
       request.headers['User-Agent'] = 'RemoteControler-App';
-      final response = await _httpClient.send(request).timeout(const Duration(seconds: 15));
+      final response =
+          await _httpClient.send(request).timeout(const Duration(seconds: 15));
 
       if (response.statusCode != 200) {
         yield OtaEvent(
@@ -191,7 +218,8 @@ class UpdaterService {
         sink.add(chunk);
         receivedBytes += chunk.length;
         if (contentLength > 0) {
-          final percent = ((receivedBytes / contentLength) * 100).clamp(0, 100).toInt();
+          final percent =
+              ((receivedBytes / contentLength) * 100).clamp(0, 100).toInt();
           if (percent > lastReportedPercent) {
             lastReportedPercent = percent;
             yield OtaEvent(OtaStatus.DOWNLOADING, percent.toString());
@@ -229,14 +257,16 @@ class UpdaterService {
           );
         }
       } catch (channelError) {
-        debugPrint('[UpdaterService] Error al invocar canal nativo installer: $channelError');
+        debugPrint(
+            '[UpdaterService] Error al invocar canal nativo installer: $channelError');
         yield OtaEvent(
           OtaStatus.INTERNAL_ERROR,
           'Error en el instalador nativo: $channelError',
         );
       }
     } catch (e, stackTrace) {
-      debugPrint('[UpdaterService] Error en flujo de actualización: $e\n$stackTrace');
+      debugPrint(
+          '[UpdaterService] Error en flujo de actualización: $e\n$stackTrace');
       yield OtaEvent(OtaStatus.INTERNAL_ERROR, e.toString());
     } finally {
       if (sink != null) {
@@ -258,14 +288,10 @@ class UpdaterService {
     final latestParts = cleanLatest.split('+');
     final currentParts = cleanCurrent.split('+');
 
-    final latestSemver = latestParts[0]
-        .split('.')
-        .map((e) => int.tryParse(e) ?? 0)
-        .toList();
-    final currentSemver = currentParts[0]
-        .split('.')
-        .map((e) => int.tryParse(e) ?? 0)
-        .toList();
+    final latestSemver =
+        latestParts[0].split('.').map((e) => int.tryParse(e) ?? 0).toList();
+    final currentSemver =
+        currentParts[0].split('.').map((e) => int.tryParse(e) ?? 0).toList();
 
     while (latestSemver.length < 3) {
       latestSemver.add(0);

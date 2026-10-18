@@ -22,7 +22,9 @@ void main() {
       expect(strB, equals(strC));
     });
 
-    test('Objetos anidados y estructuras complejas (Vectores idénticos a Python)', () {
+    test(
+        'Objetos anidados y estructuras complejas (Vectores idénticos a Python)',
+        () {
       final nested = {
         'z': {'y': 2, 'x': 1},
         'a': [
@@ -46,7 +48,8 @@ void main() {
   });
 
   group('KeyManager y Almacén Seguro', () {
-    test('Inicialización y persistencia de clave en SecureStorageAdapter', () async {
+    test('Inicialización y persistencia de clave en SecureStorageAdapter',
+        () async {
       final storage = MemorySecureStorageAdapter();
       final keyManager1 = KeyManager(storage: storage);
 
@@ -65,7 +68,8 @@ void main() {
       expect(keyManager2.publicKeyHex, equals(pubKeyHex1));
     });
 
-    test('Firma digital asimétrica Ed25519 verificada con la clave pública', () async {
+    test('Firma digital asimétrica Ed25519 verificada con la clave pública',
+        () async {
       final storage = MemorySecureStorageAdapter();
       final keyManager = KeyManager(storage: storage);
       await keyManager.initialize();
@@ -99,7 +103,8 @@ void main() {
   });
 
   group('EnvelopeBuilder y Contratos de Mensajería', () {
-    test('Ensamblado y firma de SignedEnvelope para despacho al Host', () async {
+    test('Ensamblado y firma de SignedEnvelope para despacho al Host',
+        () async {
       final storage = MemorySecureStorageAdapter();
       final keyManager = KeyManager(storage: storage);
       await keyManager.initialize();

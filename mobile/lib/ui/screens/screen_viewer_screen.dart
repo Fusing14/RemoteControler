@@ -30,7 +30,8 @@ class _ScreenViewerScreenState extends State<ScreenViewerScreen> {
   String? _errorMessage;
   int _monitorIndex = 1;
   int _monitorCount = 1;
-  final TransformationController _transformationController = TransformationController();
+  final TransformationController _transformationController =
+      TransformationController();
 
   @override
   void initState() {
@@ -89,7 +90,8 @@ class _ScreenViewerScreenState extends State<ScreenViewerScreen> {
         } else {
           if (mounted) {
             setState(() {
-              _errorMessage = res['message'] as String? ?? 'Error al capturar pantalla.';
+              _errorMessage =
+                  res['message'] as String? ?? 'Error al capturar pantalla.';
               _isLoading = false;
             });
           }
@@ -123,7 +125,9 @@ class _ScreenViewerScreenState extends State<ScreenViewerScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
-          index == 0 ? 'Mostrando todas las pantallas combinadas' : 'Cambiando a Pantalla $index',
+          index == 0
+              ? 'Mostrando todas las pantallas combinadas'
+              : 'Cambiando a Pantalla $index',
         ),
         duration: const Duration(seconds: 1),
         backgroundColor: const Color(0xFF8B5CF6),
@@ -147,19 +151,26 @@ class _ScreenViewerScreenState extends State<ScreenViewerScreen> {
           children: [
             Text(
               titleText,
-              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.white),
+              style: const TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white),
             ),
             if (!_isLoading && _errorMessage == null)
               Text(
                 '$_fps FPS • ${_latencyMs}ms',
-                style: const TextStyle(fontSize: 11, color: Color(0xFF10B981), fontWeight: FontWeight.w600),
+                style: const TextStyle(
+                    fontSize: 11,
+                    color: Color(0xFF10B981),
+                    fontWeight: FontWeight.w600),
               ),
           ],
         ),
         actions: [
           if (_monitorCount > 1)
             PopupMenuButton<int>(
-              icon: const Icon(Icons.screenshot_monitor_rounded, color: Color(0xFF8B5CF6)),
+              icon: const Icon(Icons.screenshot_monitor_rounded,
+                  color: Color(0xFF8B5CF6)),
               tooltip: 'Cambiar Pantalla',
               initialValue: _monitorIndex,
               onSelected: _selectMonitor,
@@ -172,8 +183,12 @@ class _ScreenViewerScreenState extends State<ScreenViewerScreen> {
                       child: Row(
                         children: [
                           Icon(
-                            _monitorIndex == i ? Icons.check_circle_rounded : Icons.desktop_windows_rounded,
-                            color: _monitorIndex == i ? const Color(0xFF10B981) : Colors.white70,
+                            _monitorIndex == i
+                                ? Icons.check_circle_rounded
+                                : Icons.desktop_windows_rounded,
+                            color: _monitorIndex == i
+                                ? const Color(0xFF10B981)
+                                : Colors.white70,
                             size: 20,
                           ),
                           const SizedBox(width: 10),
@@ -189,8 +204,12 @@ class _ScreenViewerScreenState extends State<ScreenViewerScreen> {
                     child: Row(
                       children: [
                         Icon(
-                          _monitorIndex == 0 ? Icons.check_circle_rounded : Icons.grid_view_rounded,
-                          color: _monitorIndex == 0 ? const Color(0xFF10B981) : Colors.white70,
+                          _monitorIndex == 0
+                              ? Icons.check_circle_rounded
+                              : Icons.grid_view_rounded,
+                          color: _monitorIndex == 0
+                              ? const Color(0xFF10B981)
+                              : Colors.white70,
                           size: 20,
                         ),
                         const SizedBox(width: 10),
@@ -209,10 +228,13 @@ class _ScreenViewerScreenState extends State<ScreenViewerScreen> {
           ),
           IconButton(
             icon: Icon(
-              _isStreaming ? Icons.pause_circle_outline : Icons.play_circle_outline,
+              _isStreaming
+                  ? Icons.pause_circle_outline
+                  : Icons.play_circle_outline,
               color: _isStreaming ? const Color(0xFF10B981) : Colors.white70,
             ),
-            tooltip: _isStreaming ? 'Pausar transmisión' : 'Reanudar transmisión',
+            tooltip:
+                _isStreaming ? 'Pausar transmisión' : 'Reanudar transmisión',
             onPressed: () {
               setState(() {
                 _isStreaming = !_isStreaming;
@@ -236,12 +258,15 @@ class _ScreenViewerScreenState extends State<ScreenViewerScreen> {
                     children: [
                       for (int i = 1; i <= _monitorCount; i++) ...[
                         ChoiceChip(
-                          label: Text('Pantalla $i${i == 1 ? " (Principal)" : ""}'),
+                          label: Text(
+                              'Pantalla $i${i == 1 ? " (Principal)" : ""}'),
                           selected: _monitorIndex == i,
                           selectedColor: const Color(0xFF8B5CF6),
                           backgroundColor: const Color(0xFF1E2230),
                           labelStyle: TextStyle(
-                            color: _monitorIndex == i ? Colors.white : const Color(0xFF94A3B8),
+                            color: _monitorIndex == i
+                                ? Colors.white
+                                : const Color(0xFF94A3B8),
                             fontWeight: FontWeight.bold,
                             fontSize: 12,
                           ),
@@ -257,7 +282,9 @@ class _ScreenViewerScreenState extends State<ScreenViewerScreen> {
                         selectedColor: const Color(0xFF8B5CF6),
                         backgroundColor: const Color(0xFF1E2230),
                         labelStyle: TextStyle(
-                          color: _monitorIndex == 0 ? Colors.white : const Color(0xFF94A3B8),
+                          color: _monitorIndex == 0
+                              ? Colors.white
+                              : const Color(0xFF94A3B8),
                           fontWeight: FontWeight.bold,
                           fontSize: 12,
                         ),
@@ -291,18 +318,23 @@ class _ScreenViewerScreenState extends State<ScreenViewerScreen> {
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          const Icon(Icons.error_outline, size: 48, color: Color(0xFFEF4444)),
+                          const Icon(Icons.error_outline,
+                              size: 48, color: Color(0xFFEF4444)),
                           const SizedBox(height: 12),
                           Text(
                             _errorMessage!,
                             textAlign: TextAlign.center,
-                            style: const TextStyle(color: Colors.white, fontSize: 14),
+                            style: const TextStyle(
+                                color: Colors.white, fontSize: 14),
                           ),
                           const SizedBox(height: 16),
                           ElevatedButton.icon(
-                            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF8B5CF6)),
-                            icon: const Icon(Icons.refresh, color: Colors.white),
-                            label: const Text('Reintentar', style: TextStyle(color: Colors.white)),
+                            style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFF8B5CF6)),
+                            icon:
+                                const Icon(Icons.refresh, color: Colors.white),
+                            label: const Text('Reintentar',
+                                style: TextStyle(color: Colors.white)),
                             onPressed: () {
                               setState(() {
                                 _isLoading = true;

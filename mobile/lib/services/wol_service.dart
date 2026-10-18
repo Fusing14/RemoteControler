@@ -45,6 +45,27 @@ class WolService {
       InternetAddress('255.255.255.255'),
     };
 
+    // 1. Detectar interfaces de red activas en el teléfono para calcular el broadcast Wi-Fi local
+    try {
+      final interfaces = await NetworkInterface.list(
+        type: InternetAddressType.IPv4,
+        includeLoopback: false,
+      );
+      for (final iface in interfaces) {
+        for (final addr in iface.addresses) {
+          if (!addr.isLoopback && !addr.address.startsWith('100.')) {
+            final parts = addr.address.split('.');
+            if (parts.length == 4) {
+              final localBcast = '${parts[0]}.${parts[1]}.${parts[2]}.255';
+              try {
+                targets.add(InternetAddress(localBcast));
+              } catch (_) {}
+            }
+          }
+        }
+      }
+    } catch (_) {}
+
     if (broadcastIp != null && broadcastIp.trim().isNotEmpty) {
       try {
         final parsed = InternetAddress(broadcastIp.trim());
