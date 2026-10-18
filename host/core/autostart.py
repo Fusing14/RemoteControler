@@ -51,6 +51,7 @@ def create_desktop_shortcut() -> str:
             $s.Arguments = '{args}'
             $s.WorkingDirectory = '{str(project_root)}'
             $s.Description = 'SecureDeck Host - Control Remoto Seguro para Windows 11'
+            $s.IconLocation = 'shell32.dll,15'
             $s.Save()
             """
             subprocess.run(
