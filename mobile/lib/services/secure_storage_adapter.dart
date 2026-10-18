@@ -4,6 +4,8 @@ library;
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../crypto/key_manager.dart';
 
+export '../crypto/key_manager.dart' show SecureStorageAdapter;
+
 /// Implementación de SecureStorageAdapter respaldada por hardware (StrongBox / Keystore / Keychain).
 class FlutterSecureStorageAdapter implements SecureStorageAdapter {
   final FlutterSecureStorage _storage;

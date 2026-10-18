@@ -6,6 +6,7 @@ library;
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 
+import '../crypto/key_manager.dart';
 import 'secure_storage_adapter.dart';
 import 'pairing_client.dart';
 
