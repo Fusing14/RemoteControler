@@ -26,6 +26,8 @@ from host.engine.contracts.commands import (
     RunningAppsListPayload,
     AppClosePayload,
     HostInfoPayload,
+    MediaNextPayload,
+    MediaPreviousPayload,
 )
 import socket
 from host.core.network.wol import get_primary_physical_mac, get_broadcast_ip
@@ -53,7 +55,13 @@ from host.core.discovery.process_manager import (
     AppCloseError,
     AppCloseSecurityError,
 )
-from host.engine.handlers.media import execute_media_command, MediaExecutionError
+from host.engine.handlers.media import (
+    execute_media_command,
+    MediaExecutionError,
+    MediaHandler,
+    media_next,
+    media_previous,
+)
 from host.engine.handlers.power import execute_power_command, PowerExecutionError
 from host.engine.handlers.apps import (
     execute_app_command,
@@ -110,6 +118,7 @@ class CommandDispatcher:
     ) -> None:
         self.device_store = device_store
         self.anti_replay = anti_replay_validator
+        self.media_handler = MediaHandler()
 
     def dispatch(self, envelope: SignedEnvelope) -> ExecutionResult:
         """
@@ -228,6 +237,12 @@ class CommandDispatcher:
                     "broadcast_ip": bcast,
                     "device_name": dev_name,
                 }
+            elif envelope.command_id == CommandCatalog.MEDIA_NEXT:
+                assert isinstance(parsed_payload, MediaNextPayload)
+                extra_data = self.media_handler.media_next()
+            elif envelope.command_id == CommandCatalog.MEDIA_PREVIOUS:
+                assert isinstance(parsed_payload, MediaPreviousPayload)
+                extra_data = self.media_handler.media_previous()
             else:
                 raise ValueError(f"Comando no soportado: {envelope.command_id}")
 
@@ -245,6 +260,10 @@ class CommandDispatcher:
                 success_msg = "Fragmento de audio procesado."
             elif envelope.command_id == CommandCatalog.HOST_INFO:
                 success_msg = f"Información del host obtenida exitosamente: {extra_data.get('device_name')} ({extra_data.get('mac_address')})"
+            elif envelope.command_id == CommandCatalog.MEDIA_NEXT:
+                success_msg = "Pista siguiente reproducida exitosamente."
+            elif envelope.command_id == CommandCatalog.MEDIA_PREVIOUS:
+                success_msg = "Pista anterior reproducida exitosamente."
             else:
                 success_msg = f"Comando {envelope.command_id.value} ejecutado exitosamente."
 

@@ -163,3 +163,64 @@ def execute_media_command(payload: MediaPayload) -> None:
         return
 
     raise MediaExecutionError(f"Acción multimedia no reconocida: {payload.action}")
+
+
+def media_next() -> dict[str, str]:
+    """
+    Simula la pulsación y liberación de VK_MEDIA_NEXT_TRACK (0xB0).
+    Avanza a la siguiente pista de reproducción en el sistema.
+    """
+    if sys.platform == "win32":
+        try:
+            user32 = _get_user32()
+            user32.keybd_event(VK_MEDIA_NEXT_TRACK, 0, 0, 0)
+            user32.keybd_event(VK_MEDIA_NEXT_TRACK, 0, KEYEVENTF_KEYUP, 0)
+        except Exception as e:
+            raise MediaExecutionError(f"Error al simular tecla siguiente pista: {e}") from e
+    return {"status": "success"}
+
+
+def media_previous() -> dict[str, str]:
+    """
+    Simula la pulsación y liberación de VK_MEDIA_PREV_TRACK (0xB1).
+    Retrocede a la pista de reproducción anterior en el sistema.
+    """
+    if sys.platform == "win32":
+        try:
+            user32 = _get_user32()
+            user32.keybd_event(VK_MEDIA_PREV_TRACK, 0, 0, 0)
+            user32.keybd_event(VK_MEDIA_PREV_TRACK, 0, KEYEVENTF_KEYUP, 0)
+        except Exception as e:
+            raise MediaExecutionError(f"Error al simular tecla pista anterior: {e}") from e
+    return {"status": "success"}
+
+
+def media_play_pause() -> dict[str, str]:
+    """
+    Simula la pulsación y liberación de VK_MEDIA_PLAY_PAUSE (0xB3).
+    Alterna entre reproducción y pausa en el reproductor activo.
+    """
+    if sys.platform == "win32":
+        try:
+            user32 = _get_user32()
+            user32.keybd_event(VK_MEDIA_PLAY_PAUSE, 0, 0, 0)
+            user32.keybd_event(VK_MEDIA_PLAY_PAUSE, 0, KEYEVENTF_KEYUP, 0)
+        except Exception as e:
+            raise MediaExecutionError(f"Error al simular tecla play/pause: {e}") from e
+    return {"status": "success"}
+
+
+class MediaHandler:
+    """Manejador de alto nivel para operaciones multimedia."""
+
+    @staticmethod
+    def media_next() -> dict[str, str]:
+        return media_next()
+
+    @staticmethod
+    def media_previous() -> dict[str, str]:
+        return media_previous()
+
+    @staticmethod
+    def media_play_pause() -> dict[str, str]:
+        return media_play_pause()

@@ -249,6 +249,18 @@ class RemoteControlClient {
     );
   }
 
+  /// Envía la instrucción multimedia de siguiente pista (MEDIA_NEXT).
+  Future<void> mediaNext() async =>
+      await sendCommand(commandId: 'MEDIA_NEXT', payload: {});
+
+  /// Envía la instrucción multimedia de pista anterior (MEDIA_PREVIOUS).
+  Future<void> mediaPrevious() async =>
+      await sendCommand(commandId: 'MEDIA_PREVIOUS', payload: {});
+
+  /// Envía la instrucción multimedia de reproducir o pausar (MEDIA / PLAY_PAUSE).
+  Future<void> mediaPlayPause() async =>
+      await sendCommand(commandId: 'MEDIA', payload: {'action': 'PLAY_PAUSE'});
+
   /// Transmite paquetes de streaming continuo (ej. fragmentos de audio de micrófono PCM)
   /// en modo 'fire-and-forget' sin bloquear _activeCommandCompleter ni requerir confirmación síncrona.
   Future<void> sendStreamPacket({

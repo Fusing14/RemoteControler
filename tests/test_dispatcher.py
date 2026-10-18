@@ -99,6 +99,30 @@ def test_dispatcher_success_flow(mock_media, test_setup):
     assert mock_media.called
 
 
+def test_dispatcher_media_next(test_setup):
+    """Verifica el despacho exitoso del comando MEDIA_NEXT."""
+    dispatcher = test_setup["dispatcher"]
+    with patch.object(dispatcher.media_handler, "media_next", return_value={"status": "success"}) as mock_next:
+        envelope = create_envelope(test_setup, CommandCatalog.MEDIA_NEXT, {})
+        result = dispatcher.dispatch(envelope)
+
+        assert result.status == ExecutionStatus.SUCCESS
+        assert result.command_id == CommandCatalog.MEDIA_NEXT.value
+        assert mock_next.called
+
+
+def test_dispatcher_media_previous(test_setup):
+    """Verifica el despacho exitoso del comando MEDIA_PREVIOUS."""
+    dispatcher = test_setup["dispatcher"]
+    with patch.object(dispatcher.media_handler, "media_previous", return_value={"status": "success"}) as mock_prev:
+        envelope = create_envelope(test_setup, CommandCatalog.MEDIA_PREVIOUS, {})
+        result = dispatcher.dispatch(envelope)
+
+        assert result.status == ExecutionStatus.SUCCESS
+        assert result.command_id == CommandCatalog.MEDIA_PREVIOUS.value
+        assert mock_prev.called
+
+
 @patch("host.engine.dispatcher.execute_power_command")
 def test_dispatcher_success_power_flow(mock_power, test_setup):
     """Prueba de flujo exitoso completo para un comando de energía."""

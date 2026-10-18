@@ -20,8 +20,13 @@ from host.engine.handlers.media import (
     execute_media_command,
     send_virtual_key,
     VK_MEDIA_PLAY_PAUSE,
+    VK_MEDIA_NEXT_TRACK,
+    VK_MEDIA_PREV_TRACK,
     VK_VOLUME_UP,
     VK_VOLUME_DOWN,
+    media_next,
+    media_previous,
+    MediaHandler,
 )
 from host.engine.handlers.power import (
     execute_power_command,
@@ -59,6 +64,46 @@ def test_media_set_volume_bounded(mock_send_vk):
 
     # 50 pasos hacia abajo + (60 // 2 = 30) pasos hacia arriba = 80 llamadas
     assert mock_send_vk.call_count == 80
+
+
+@patch("host.engine.handlers.media._get_user32")
+def test_media_next(mock_get_user32):
+    """Verifica que media_next simula pulsación y liberación de VK_MEDIA_NEXT_TRACK."""
+    mock_u32 = MagicMock()
+    mock_get_user32.return_value = mock_u32
+
+    res = media_next()
+    assert res == {"status": "success"}
+    assert mock_u32.keybd_event.call_count == 2
+    mock_u32.keybd_event.assert_any_call(VK_MEDIA_NEXT_TRACK, 0, 0, 0)
+    mock_u32.keybd_event.assert_any_call(VK_MEDIA_NEXT_TRACK, 0, 2, 0)
+
+
+@patch("host.engine.handlers.media._get_user32")
+def test_media_previous(mock_get_user32):
+    """Verifica que media_previous simula pulsación y liberación de VK_MEDIA_PREV_TRACK."""
+    mock_u32 = MagicMock()
+    mock_get_user32.return_value = mock_u32
+
+    res = media_previous()
+    assert res == {"status": "success"}
+    assert mock_u32.keybd_event.call_count == 2
+    mock_u32.keybd_event.assert_any_call(VK_MEDIA_PREV_TRACK, 0, 0, 0)
+    mock_u32.keybd_event.assert_any_call(VK_MEDIA_PREV_TRACK, 0, 2, 0)
+
+
+@patch("host.engine.handlers.media.media_next")
+@patch("host.engine.handlers.media.media_previous")
+def test_media_handler_class(mock_prev, mock_next):
+    """Verifica que MediaHandler despacha correctamente a media_next y media_previous."""
+    mock_next.return_value = {"status": "success"}
+    mock_prev.return_value = {"status": "success"}
+
+    handler = MediaHandler()
+    assert handler.media_next() == {"status": "success"}
+    assert handler.media_previous() == {"status": "success"}
+    assert mock_next.called
+    assert mock_prev.called
 
 
 # ==========================================

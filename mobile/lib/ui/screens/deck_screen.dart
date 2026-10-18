@@ -45,6 +45,7 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
       SavedHostsService(storage: widget.pairingClient.storage);
   late String _currentEndpoint = widget.hostEndpoint;
   Timer? _updateTimer;
+  bool _isPlaying = true;
 
   // Estado del micrófono (Intercom en tiempo real)
   bool _isMicStreaming = false;
@@ -266,6 +267,93 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
       if (status != 'SUCCESS') {
         throw Exception(res['message'] ?? 'Comando rechazado por el Host.');
       }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            backgroundColor: const Color(0xFFEF4444),
+            content: Text(
+              e.toString().replaceAll('Exception: ', ''),
+              style: const TextStyle(
+                  color: Colors.white, fontWeight: FontWeight.w600),
+            ),
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+      rethrow;
+    }
+  }
+
+  Future<void> _mediaPrevious() async {
+    if (_controlClient == null) {
+      final km = widget.keyManager ?? widget.pairingClient.keyManager;
+      await km.ensureInitialized();
+      if (_controlClient == null) {
+        await _initControlClient();
+      }
+    }
+    try {
+      await _controlClient!.mediaPrevious();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            backgroundColor: const Color(0xFFEF4444),
+            content: Text(
+              e.toString().replaceAll('Exception: ', ''),
+              style: const TextStyle(
+                  color: Colors.white, fontWeight: FontWeight.w600),
+            ),
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+      rethrow;
+    }
+  }
+
+  Future<void> _mediaPlayPause() async {
+    setState(() {
+      _isPlaying = !_isPlaying;
+    });
+    if (_controlClient == null) {
+      final km = widget.keyManager ?? widget.pairingClient.keyManager;
+      await km.ensureInitialized();
+      if (_controlClient == null) {
+        await _initControlClient();
+      }
+    }
+    try {
+      await _controlClient!.mediaPlayPause();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            backgroundColor: const Color(0xFFEF4444),
+            content: Text(
+              e.toString().replaceAll('Exception: ', ''),
+              style: const TextStyle(
+                  color: Colors.white, fontWeight: FontWeight.w600),
+            ),
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+      rethrow;
+    }
+  }
+
+  Future<void> _mediaNext() async {
+    if (_controlClient == null) {
+      final km = widget.keyManager ?? widget.pairingClient.keyManager;
+      await km.ensureInitialized();
+      if (_controlClient == null) {
+        await _initControlClient();
+      }
+    }
+    try {
+      await _controlClient!.mediaNext();
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -1159,41 +1247,71 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
                 ),
               ),
               const SizedBox(height: 12),
-              GridView.count(
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                crossAxisCount: 2,
-                mainAxisSpacing: 12,
-                crossAxisSpacing: 12,
-                childAspectRatio: 1.4,
+              // Controles de Reproducción Clásicos (Anterior, Pausar/Reanudar, Siguiente)
+              Row(
                 children: [
-                  DeckButton(
-                    label: 'Play / Pause',
-                    icon: Icons.play_arrow_rounded,
-                    accentColor: const Color(0xFF6366F1), // Indigo
-                    onPressed: () =>
-                        _sendCommand('MEDIA', {'action': 'PLAY_PAUSE'}),
+                  Expanded(
+                    child: DeckButton(
+                      label: 'Anterior',
+                      icon: Icons.skip_previous_rounded,
+                      accentColor: const Color(0xFF818CF8),
+                      onPressed: () => _mediaPrevious(),
+                    ),
                   ),
-                  DeckButton(
-                    label: 'Mute',
-                    icon: Icons.volume_off_rounded,
-                    accentColor: const Color(0xFF8B5CF6), // Violeta
-                    onPressed: () =>
-                        _sendCommand('MEDIA', {'action': 'VOLUME_MUTE'}),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: DeckButton(
+                      label: _isPlaying ? 'Pausar' : 'Reanudar',
+                      icon: _isPlaying
+                          ? Icons.pause_circle_filled_rounded
+                          : Icons.play_circle_filled_rounded,
+                      accentColor: const Color(0xFF6366F1),
+                      onPressed: () => _mediaPlayPause(),
+                    ),
                   ),
-                  DeckButton(
-                    label: 'Volumen +',
-                    icon: Icons.volume_up_rounded,
-                    accentColor: const Color(0xFF3B82F6), // Azul
-                    onPressed: () =>
-                        _sendCommand('MEDIA', {'action': 'VOLUME_UP'}),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: DeckButton(
+                      label: 'Siguiente',
+                      icon: Icons.skip_next_rounded,
+                      accentColor: const Color(0xFF818CF8),
+                      onPressed: () => _mediaNext(),
+                    ),
                   ),
-                  DeckButton(
-                    label: 'Volumen -',
-                    icon: Icons.volume_down_rounded,
-                    accentColor: const Color(0xFF0EA5E9), // Sky
-                    onPressed: () =>
-                        _sendCommand('MEDIA', {'action': 'VOLUME_DOWN'}),
+                ],
+              ),
+              const SizedBox(height: 12),
+              // Controles de Volumen
+              Row(
+                children: [
+                  Expanded(
+                    child: DeckButton(
+                      label: 'Mute',
+                      icon: Icons.volume_off_rounded,
+                      accentColor: const Color(0xFF8B5CF6),
+                      onPressed: () =>
+                          _sendCommand('MEDIA', {'action': 'VOLUME_MUTE'}),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: DeckButton(
+                      label: 'Volumen +',
+                      icon: Icons.volume_up_rounded,
+                      accentColor: const Color(0xFF3B82F6),
+                      onPressed: () =>
+                          _sendCommand('MEDIA', {'action': 'VOLUME_UP'}),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: DeckButton(
+                      label: 'Volumen -',
+                      icon: Icons.volume_down_rounded,
+                      accentColor: const Color(0xFF0EA5E9),
+                      onPressed: () =>
+                          _sendCommand('MEDIA', {'action': 'VOLUME_DOWN'}),
+                    ),
                   ),
                 ],
               ),

@@ -26,6 +26,8 @@ class CommandCatalog(str, Enum):
     RUNNING_APPS_LIST = "RUNNING_APPS_LIST"
     APP_CLOSE = "APP_CLOSE"
     HOST_INFO = "HOST_INFO"
+    MEDIA_NEXT = "MEDIA_NEXT"
+    MEDIA_PREVIOUS = "MEDIA_PREVIOUS"
 
 
 class MediaAction(str, Enum):
@@ -318,6 +320,20 @@ class HostInfoPayload(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
+class MediaNextPayload(BaseModel):
+    """
+    Payload para saltar a la siguiente pista multimedia.
+    """
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class MediaPreviousPayload(BaseModel):
+    """
+    Payload para retroceder a la pista multimedia anterior.
+    """
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
 CommandPayloadType = Union[
     MediaPayload,
     PowerPayload,
@@ -333,6 +349,8 @@ CommandPayloadType = Union[
     RunningAppsListPayload,
     AppClosePayload,
     HostInfoPayload,
+    MediaNextPayload,
+    MediaPreviousPayload,
 ]
 
 COMMAND_PAYLOAD_SCHEMA_MAP: Dict[CommandCatalog, type[BaseModel]] = {
@@ -350,6 +368,8 @@ COMMAND_PAYLOAD_SCHEMA_MAP: Dict[CommandCatalog, type[BaseModel]] = {
     CommandCatalog.RUNNING_APPS_LIST: RunningAppsListPayload,
     CommandCatalog.APP_CLOSE: AppClosePayload,
     CommandCatalog.HOST_INFO: HostInfoPayload,
+    CommandCatalog.MEDIA_NEXT: MediaNextPayload,
+    CommandCatalog.MEDIA_PREVIOUS: MediaPreviousPayload,
 }
 
 
