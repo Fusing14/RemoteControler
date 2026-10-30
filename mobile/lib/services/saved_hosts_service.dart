@@ -1,13 +1,13 @@
 /// Servicio de gestión y persistencia multi-PC (Multi-Host Manager).
 /// Permite almacenar múltiples ordenadores vinculados, asignarles nombres personalizados,
-/// monitorizar su estado de conexión mediante ping (/health) y alternar entre ellos.
+/// almacenar su IP de Tailscale, IP LAN local, IP de broadcast, MAC física y huella TLS
+/// (Certificate Pinning SHA-256), monitorizar su estado (/health) y alternar entre ellos.
 library;
 
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import '../crypto/key_manager.dart';
-import 'secure_storage_adapter.dart';
 import 'pairing_client.dart';
 
 /// Modelo de datos que representa un ordenador (Host) guardado en el teléfono.
@@ -18,6 +18,8 @@ class SavedHost {
   final String deviceId;
   final String? macAddress;
   final String? broadcastIp;
+  final String? lanIp;
+  final String? certFingerprint;
   final int lastConnectedAt;
 
   const SavedHost({
@@ -27,6 +29,8 @@ class SavedHost {
     required this.deviceId,
     this.macAddress,
     this.broadcastIp,
+    this.lanIp,
+    this.certFingerprint,
     required this.lastConnectedAt,
   });
 
@@ -37,6 +41,8 @@ class SavedHost {
     String? deviceId,
     String? macAddress,
     String? broadcastIp,
+    String? lanIp,
+    String? certFingerprint,
     int? lastConnectedAt,
   }) {
     return SavedHost(
@@ -46,6 +52,8 @@ class SavedHost {
       deviceId: deviceId ?? this.deviceId,
       macAddress: macAddress ?? this.macAddress,
       broadcastIp: broadcastIp ?? this.broadcastIp,
+      lanIp: lanIp ?? this.lanIp,
+      certFingerprint: certFingerprint ?? this.certFingerprint,
       lastConnectedAt: lastConnectedAt ?? this.lastConnectedAt,
     );
   }
@@ -57,6 +65,8 @@ class SavedHost {
         'device_id': deviceId,
         'mac_address': macAddress,
         'broadcast_ip': broadcastIp,
+        'lan_ip': lanIp,
+        'cert_fingerprint': certFingerprint,
         'last_connected_at': lastConnectedAt,
       };
 
@@ -70,6 +80,8 @@ class SavedHost {
         deviceId: json['device_id'] as String? ?? '',
         macAddress: json['mac_address'] as String?,
         broadcastIp: json['broadcast_ip'] as String?,
+        lanIp: json['lan_ip'] as String?,
+        certFingerprint: json['cert_fingerprint'] as String?,
         lastConnectedAt: json['last_connected_at'] as int? ?? 0,
       );
 }
@@ -94,7 +106,6 @@ class SavedHostsService {
       return;
     }
 
-    // Auto-migración desde las claves individuales anteriores de PairingClient
     final legacyEndpoint = await _storage.read(PairingClient.keyPairedEndpoint);
     if (legacyEndpoint != null && legacyEndpoint.trim().isNotEmpty) {
       final legacyDeviceId =
@@ -103,6 +114,9 @@ class SavedHostsService {
       final legacyMac = await _storage.read(PairingClient.keyPairedMacAddress);
       final legacyBcast =
           await _storage.read(PairingClient.keyPairedBroadcastIp);
+      final legacyLanIp = await _storage.read(PairingClient.keyPairedLanIp);
+      final legacyCertFp =
+          await _storage.read(PairingClient.keyPairedCertFingerprint);
 
       final migratedHost = SavedHost(
         id: legacyDeviceId.isNotEmpty ? legacyDeviceId : legacyEndpoint,
@@ -111,6 +125,8 @@ class SavedHostsService {
         deviceId: legacyDeviceId,
         macAddress: legacyMac,
         broadcastIp: legacyBcast,
+        lanIp: legacyLanIp,
+        certFingerprint: legacyCertFp,
         lastConnectedAt: DateTime.now().toUtc().millisecondsSinceEpoch ~/ 1000,
       );
 
@@ -153,7 +169,6 @@ class SavedHostsService {
   Future<void> setActiveHostId(String hostId) async {
     await _storage.write(keyActiveHostId, hostId);
 
-    // Sincronizar con las claves globales de PairingClient para compatibilidad retroactiva
     final hosts = await getHosts();
     final found = hosts.where((h) => h.id == hostId).firstOrNull;
     if (found != null) {
@@ -166,6 +181,13 @@ class SavedHostsService {
       if (found.broadcastIp != null) {
         await _storage.write(
             PairingClient.keyPairedBroadcastIp, found.broadcastIp!);
+      }
+      if (found.lanIp != null) {
+        await _storage.write(PairingClient.keyPairedLanIp, found.lanIp!);
+      }
+      if (found.certFingerprint != null) {
+        await _storage.write(
+            PairingClient.keyPairedCertFingerprint, found.certFingerprint!);
       }
     }
   }
@@ -191,6 +213,8 @@ class SavedHostsService {
     String? customName,
     String? macAddress,
     String? broadcastIp,
+    String? lanIp,
+    String? certFingerprint,
   }) async {
     final hosts = await getHosts();
     final now = DateTime.now().toUtc().millisecondsSinceEpoch ~/ 1000;
@@ -208,6 +232,8 @@ class SavedHostsService {
         customName: customName ?? prev.customName,
         macAddress: macAddress ?? prev.macAddress,
         broadcastIp: broadcastIp ?? prev.broadcastIp,
+        lanIp: lanIp ?? prev.lanIp,
+        certFingerprint: certFingerprint ?? prev.certFingerprint,
         lastConnectedAt: now,
       );
       hosts[existingIndex] = targetHost;
@@ -220,6 +246,8 @@ class SavedHostsService {
         deviceId: deviceId,
         macAddress: macAddress,
         broadcastIp: broadcastIp,
+        lanIp: lanIp,
+        certFingerprint: certFingerprint,
         lastConnectedAt: now,
       );
       hosts.add(targetHost);
@@ -256,6 +284,8 @@ class SavedHostsService {
         await _storage.delete(PairingClient.keyPairedHostDeviceId);
         await _storage.delete(PairingClient.keyPairedMacAddress);
         await _storage.delete(PairingClient.keyPairedBroadcastIp);
+        await _storage.delete(PairingClient.keyPairedLanIp);
+        await _storage.delete(PairingClient.keyPairedCertFingerprint);
       }
     }
   }

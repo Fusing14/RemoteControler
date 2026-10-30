@@ -135,6 +135,10 @@ class AppLaunchPayload(BaseModel):
         elif self.platform == AppPlatform.SYSTEM:
             if not self.target_path and not self.app_id:
                 raise ValueError("target_path o app_id es obligatorio para la plataforma SYSTEM")
+            if self.target_path:
+                tp = self.target_path.strip()
+                if ".." in tp or tp.startswith("\\\\") or any(c in tp for c in ("\r", "\n", "\0", "|", ";", "&", "`")):
+                    raise ValueError("target_path contiene secuencias o metacaracteres prohibidos.")
         return self
 
 
@@ -197,14 +201,14 @@ class CameraFramePayload(BaseModel):
 class UnlockPcPayload(BaseModel):
     """
     Payload para desbloqueo remoto autenticado de la sesión de Windows.
-    Acepta tanto contraseña de cuenta Windows como PIN de Windows Hello.
+    Acepta contraseña de cuenta Windows, PIN de Windows Hello o uso del PIN almacenado en DPAPI.
+    Mitiga CWE-20 validando longitud y ausencia de caracteres de control.
     """
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    password: str = Field(
-        ...,
-        min_length=1,
-        max_length=256,
+    password: Optional[str] = Field(
+        default=None,
+        max_length=128,
         description="Contraseña de la cuenta de Windows o PIN de Windows Hello."
     )
     username: Optional[str] = Field(
@@ -212,6 +216,22 @@ class UnlockPcPayload(BaseModel):
         max_length=128,
         description="Nombre de usuario de Windows (por defecto el usuario actual de la sesión)."
     )
+    use_stored_pin: bool = Field(
+        default=False,
+        description="Si es True, utiliza el PIN cifrado en DPAPI del Host para desbloquear en 1 toque."
+    )
+
+    @model_validator(mode="after")
+    def validate_unlock_payload(self) -> "UnlockPcPayload":
+        if not self.use_stored_pin:
+            if not self.password or not self.password.strip():
+                raise ValueError("Debe proporcionar 'password' o activar 'use_stored_pin=True'.")
+        if self.password is not None:
+            if len(self.password.strip()) == 0 and not self.use_stored_pin:
+                raise ValueError("El PIN o contraseña no puede estar vacío.")
+            if any(ord(c) < 32 or ord(c) == 127 for c in self.password):
+                raise ValueError("El PIN o contraseña contiene caracteres de control no permitidos.")
+        return self
 
 
 class AppsListPayload(BaseModel):

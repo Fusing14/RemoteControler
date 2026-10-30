@@ -5,9 +5,11 @@ library;
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
+import 'dart:typed_data';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../protocol/envelope_builder.dart';
+import 'certificate_pinning.dart';
 
 class NetworkConnectionException implements Exception {
   final String message;
@@ -38,11 +40,14 @@ class RemoteControlClient {
   final String hostEndpoint; // Ej: "100.85.12.34:8443" o "127.0.0.1:8443"
   final EnvelopeBuilder envelopeBuilder;
   final bool allowLoopback;
+  final String? pinnedCertFingerprint;
 
   WebSocketChannel? _channel;
   StreamSubscription? _subscription;
   Timer? _heartbeatTimer;
   Timer? _reconnectTimer;
+  DateTime? _lastPingSentAt;
+  int _lastLatencyMs = 0;
 
   DeckConnectionState _state = DeckConnectionState.disconnected;
   final StreamController<DeckConnectionState> _stateController =
@@ -57,6 +62,7 @@ class RemoteControlClient {
     required this.hostEndpoint,
     required this.envelopeBuilder,
     this.allowLoopback = false,
+    this.pinnedCertFingerprint,
   }) {
     _validateEndpoint(hostEndpoint);
   }
@@ -64,6 +70,15 @@ class RemoteControlClient {
   Stream<DeckConnectionState> get stateStream => _stateController.stream;
   DeckConnectionState get state => _state;
   bool get isConnected => _state == DeckConnectionState.connected;
+  int get lastLatencyMs => _lastLatencyMs;
+
+  /// Verifica un certificado DER contra el fingerprint anclado de este cliente (TOFU / Pinning).
+  bool verifyServerCertificateDer(List<int> derBytes) {
+    return CertificatePinningVerifier.verifyCertificateDer(
+      Uint8List.fromList(derBytes),
+      pinnedCertFingerprint,
+    );
+  }
 
   /// Valida que el hostEndpoint apunte exclusivamente a la red Tailscale o localhost en modo dev.
   void _validateEndpoint(String endpoint) {
@@ -143,6 +158,14 @@ class RemoteControlClient {
     try {
       final jsonMap = json.decode(data as String) as Map<String, dynamic>;
 
+      if (jsonMap['type'] == 'PONG') {
+        if (_lastPingSentAt != null) {
+          _lastLatencyMs =
+              DateTime.now().difference(_lastPingSentAt!).inMilliseconds;
+        }
+        return;
+      }
+
       // Los paquetes de streaming (como chunks de audio) no deben resolver completers de otros comandos
       final cmdId = jsonMap['command_id'] as String?;
       if (cmdId == 'MIC_AUDIO_CHUNK') {
@@ -203,9 +226,12 @@ class RemoteControlClient {
 
   void _startHeartbeat() {
     _heartbeatTimer?.cancel();
-    _heartbeatTimer = Timer.periodic(const Duration(seconds: 10), (_) {
+    _heartbeatTimer = Timer.periodic(const Duration(seconds: 15), (_) {
       if (_state == DeckConnectionState.connected && _channel != null) {
-        // Enviar ping pasivo o keep-alive
+        try {
+          _lastPingSentAt = DateTime.now();
+          _channel!.sink.add('{"type":"PING"}');
+        } catch (_) {}
       }
     });
   }

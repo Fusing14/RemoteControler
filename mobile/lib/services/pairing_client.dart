@@ -1,5 +1,6 @@
 /// Cliente de emparejamiento seguro fuera de banda (QR Scanning & Pairing Exchange).
-/// Valida la firma del Host antes de establecer la conexión o enviar credenciales.
+/// Valida la firma Ed25519 del Host antes de establecer la conexión o enviar credenciales,
+/// y persiste los metadatos de red (IP Tailscale, IP LAN, Broadcast, MAC física y huella TLS).
 library;
 
 import 'dart:convert';
@@ -16,6 +17,8 @@ class PairingClient {
   static const String keyPairedHostDeviceId = 'rc_paired_host_device_id_v1';
   static const String keyPairedMacAddress = 'rc_paired_mac_address';
   static const String keyPairedBroadcastIp = 'rc_paired_broadcast_ip';
+  static const String keyPairedLanIp = 'rc_paired_lan_ip';
+  static const String keyPairedCertFingerprint = 'rc_paired_cert_fingerprint';
 
   final KeyManager _keyManager;
   final SecureStorageAdapter _storage;
@@ -34,10 +37,10 @@ class PairingClient {
 
   /// Procesa el contenido crudo escaneado desde el código QR:
   /// 1. Parsea el JSON del desafío emitido por el Host.
-  /// 2. Comprueba que el token no haya expirado (TTL de 3 minutos).
+  /// 2. Comprueba que el token no haya expirado.
   /// 3. Verifica criptográficamente la firma Ed25519 del Host.
   /// 4. Realiza la llamada HTTP POST /pair para intercambiar credenciales.
-  /// 5. Persiste el endpoint de Tailscale y la identidad del Host en almacenamiento seguro.
+  /// 5. Persiste el endpoint de Tailscale, IP LAN, Broadcast, MAC y huella SHA-256 TLS.
   Future<String> pairWithQrContent(
     String qrContent, {
     String deviceLabel = 'Mobile Control Client',
@@ -137,20 +140,33 @@ class PairingClient {
           'El Host rechazó el emparejamiento (HTTP ${response.statusCode}).');
     }
 
+    String? respCertFp;
+    try {
+      final respJson = json.decode(response.body) as Map<String, dynamic>;
+      respCertFp = respJson['cert_fingerprint'] as String?;
+    } catch (_) {}
+
+    final macAddr = challenge['mac_address'] as String?;
+    final bcastIp = challenge['broadcast_ip'] as String?;
+    final lanIp = challenge['lan_ip'] as String?;
+    final certFp = (challenge['cert_fingerprint'] as String?) ?? respCertFp;
+
     // 4. Persistencia del endpoint verificado en Hardware Keystore / Keychain
     await _storage.write(keyPairedEndpoint, endpoint);
     await _storage.write(
         keyPairedHostDeviceId, challenge['host_device_id'] as String);
 
-    if (challenge.containsKey('mac_address') &&
-        challenge['mac_address'] != null) {
-      await _storage.write(
-          keyPairedMacAddress, challenge['mac_address'] as String);
+    if (macAddr != null && macAddr.trim().isNotEmpty) {
+      await _storage.write(keyPairedMacAddress, macAddr.trim());
     }
-    if (challenge.containsKey('broadcast_ip') &&
-        challenge['broadcast_ip'] != null) {
-      await _storage.write(
-          keyPairedBroadcastIp, challenge['broadcast_ip'] as String);
+    if (bcastIp != null && bcastIp.trim().isNotEmpty) {
+      await _storage.write(keyPairedBroadcastIp, bcastIp.trim());
+    }
+    if (lanIp != null && lanIp.trim().isNotEmpty) {
+      await _storage.write(keyPairedLanIp, lanIp.trim());
+    }
+    if (certFp != null && certFp.trim().isNotEmpty) {
+      await _storage.write(keyPairedCertFingerprint, certFp.trim());
     }
 
     // 5. Registrar en el gestor multi-PC
@@ -159,8 +175,10 @@ class PairingClient {
       await hostsService.addOrUpdateHost(
         endpoint: endpoint,
         deviceId: challenge['host_device_id'] as String,
-        macAddress: challenge['mac_address'] as String?,
-        broadcastIp: challenge['broadcast_ip'] as String?,
+        macAddress: macAddr,
+        broadcastIp: bcastIp,
+        lanIp: lanIp,
+        certFingerprint: certFp,
       );
     } catch (_) {}
 
@@ -197,12 +215,34 @@ class PairingClient {
     await _storage.write(keyPairedBroadcastIp, ip);
   }
 
+  /// Recupera la IP LAN local física del Host para Wake-on-LAN.
+  Future<String?> getPairedLanIp() async {
+    return _storage.read(keyPairedLanIp);
+  }
+
+  /// Guarda la IP LAN local física del Host.
+  Future<void> savePairedLanIp(String ip) async {
+    await _storage.write(keyPairedLanIp, ip);
+  }
+
+  /// Recupera la huella SHA-256 del certificado del Host (Certificate Pinning).
+  Future<String?> getPairedCertFingerprint() async {
+    return _storage.read(keyPairedCertFingerprint);
+  }
+
+  /// Guarda la huella SHA-256 del certificado del Host.
+  Future<void> savePairedCertFingerprint(String fingerprint) async {
+    await _storage.write(keyPairedCertFingerprint, fingerprint);
+  }
+
   /// Desvincula el teléfono del Host y purga los secretos de sesión.
   Future<void> unpair() async {
     await _storage.delete(keyPairedEndpoint);
     await _storage.delete(keyPairedHostDeviceId);
     await _storage.delete(keyPairedMacAddress);
     await _storage.delete(keyPairedBroadcastIp);
+    await _storage.delete(keyPairedLanIp);
+    await _storage.delete(keyPairedCertFingerprint);
   }
 
   static Uint8List _hexToBytes(String hex) {

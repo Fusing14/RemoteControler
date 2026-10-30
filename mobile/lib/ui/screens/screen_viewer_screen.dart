@@ -19,8 +19,10 @@ class ScreenViewerScreen extends StatefulWidget {
   State<ScreenViewerScreen> createState() => _ScreenViewerScreenState();
 }
 
-class _ScreenViewerScreenState extends State<ScreenViewerScreen> {
+class _ScreenViewerScreenState extends State<ScreenViewerScreen>
+    with WidgetsBindingObserver {
   bool _isStreaming = true;
+  bool _pausedByLifecycle = false;
   Uint8List? _currentFrame;
   int _fps = 0;
   int _frameCount = 0;
@@ -36,14 +38,36 @@ class _ScreenViewerScreenState extends State<ScreenViewerScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _startStreamingLoop();
   }
 
   @override
   void dispose() {
     _isStreaming = false;
+    WidgetsBinding.instance.removeObserver(this);
     _transformationController.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.hidden) {
+      if (_isStreaming) {
+        _pausedByLifecycle = true;
+        _isStreaming = false;
+      }
+    } else if (state == AppLifecycleState.resumed) {
+      if (_pausedByLifecycle && mounted) {
+        _pausedByLifecycle = false;
+        setState(() {
+          _isStreaming = true;
+        });
+        _startStreamingLoop();
+      }
+    }
   }
 
   Future<void> _startStreamingLoop() async {

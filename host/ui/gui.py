@@ -39,11 +39,15 @@ from host.core.autostart import (
     disable_autostart,
     create_desktop_shortcut,
 )
+from pathlib import Path
 from host.core.network.wol import (
     get_primary_physical_mac,
     get_broadcast_ip,
+    get_lan_ip,
     configure_windows_wol,
+    diagnose_wol_status,
 )
+from host.core.updater import perform_resilient_update
 from host.transport.network_utils import get_tailscale_ip, validate_bind_address
 from host.transport.server import create_app
 
@@ -85,9 +89,11 @@ class HostDashboardApp:
         try:
             self.mac_address = get_primary_physical_mac()
             self.broadcast_ip = get_broadcast_ip()
+            self.lan_ip = get_lan_ip()
         except Exception:
             self.mac_address = "No detectado"
             self.broadcast_ip = "255.255.255.255"
+            self.lan_ip = "127.0.0.1"
 
         self._qr_image_ref = None  # Evitar recolección de basura en Tkinter
 
@@ -216,8 +222,12 @@ class HostDashboardApp:
         self._update_pin_status_label()
 
         ttk.Label(info_grid, text="Wake-on-LAN (MAC):", style="CardMuted.TLabel").grid(row=3, column=0, sticky="w", pady=2)
-        mac_text = f"{self.mac_address} (Listo)" if self.mac_address and self.mac_address != "No detectado" else "No detectado"
-        self.lbl_wol = ttk.Label(info_grid, text=mac_text, style="Card.TLabel", font=("Consolas", 10))
+        mac_text = (
+            f"{self.mac_address} | LAN: {self.lan_ip} | Broadcast: {self.broadcast_ip}"
+            if self.mac_address and self.mac_address != "No detectado"
+            else "No detectado"
+        )
+        self.lbl_wol = ttk.Label(info_grid, text=mac_text, style="Card.TLabel", font=("Consolas", 9))
         self.lbl_wol.grid(row=3, column=1, sticky="w", padx=10, pady=2)
 
         ttk.Label(info_grid, text="Permisos de Windows:", style="CardMuted.TLabel").grid(row=4, column=0, sticky="w", pady=2)
@@ -719,60 +729,44 @@ class HostDashboardApp:
         self.root.destroy()
 
     def _on_update_server_clicked(self) -> None:
-        """Lanza la verificación y actualización del servidor en un hilo secundario."""
-        def run_update():
-            repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        """Lanza la verificación y actualización resiliente del servidor (Git auto-reparable o ZIP HTTPS)."""
+        def update_progress(msg: str) -> None:
             try:
-                self.btn_update.config(state="disabled", text="Comprobando...")
+                self.root.after(0, lambda m=msg: self.btn_update.config(text=m[:22]))
+            except Exception:
+                pass
 
-                # 1. Fetch de cambios en origin main
-                subprocess.run(
-                    ["git", "fetch", "origin", "main"],
-                    capture_output=True,
-                    text=True,
-                    check=True,
-                    cwd=repo_root,
+        def run_update():
+            repo_root = Path(__file__).resolve().parent.parent.parent
+            try:
+                self.root.after(0, lambda: self.btn_update.config(state="disabled", text="Comprobando..."))
+
+                res = perform_resilient_update(
+                    repo_root=repo_root,
+                    progress_callback=update_progress,
+                    install_dependencies=True,
                 )
 
-                # 2. Comprobar si HEAD local difiere de origin/main
-                res = subprocess.run(
-                    ["git", "rev-list", "HEAD..origin/main", "--count"],
-                    capture_output=True,
-                    text=True,
-                    check=True,
-                    cwd=repo_root,
-                )
-                pending_commits = int(res.stdout.strip() or "0")
-
-                if pending_commits == 0:
+                if not res.get("updated"):
                     self.root.after(
                         0,
-                        lambda: messagebox.showinfo(
+                        lambda m=res.get("message", "El servidor ya está en la última versión."): messagebox.showinfo(
                             "Actualización",
-                            "El servidor ya está en la última versión.",
+                            m,
+                            parent=self.root,
                         ),
                     )
                     return
 
-                # 3. Descargar commits e instalar dependencias
-                self.btn_update.config(text="Descargando...")
-                subprocess.run(["git", "pull", "origin", "main"], check=True, cwd=repo_root)
-
-                self.btn_update.config(text="Instalando...")
-                subprocess.run(
-                    [sys.executable, "-m", "pip", "install", "-r", "requirements.txt", "--quiet"],
-                    check=True,
-                    cwd=repo_root,
-                )
-
-                # 4. Confirmar y reiniciar aplicación
                 def restart():
                     messagebox.showinfo(
                         "Actualización Exitosa",
-                        "El servidor ha sido actualizado exitosamente.\nLa aplicación se reiniciará ahora.",
+                        f"{res.get('message', 'El servidor ha sido actualizado exitosamente.')}\n\n"
+                        "La aplicación se reiniciará ahora.",
+                        parent=self.root,
                     )
                     self._stop_server()
-                    subprocess.Popen([sys.executable] + sys.argv, cwd=repo_root)
+                    subprocess.Popen([sys.executable] + sys.argv, cwd=str(repo_root))
                     self.root.destroy()
 
                 self.root.after(0, restart)
@@ -784,6 +778,7 @@ class HostDashboardApp:
                     lambda err=str(e): messagebox.showerror(
                         "Error de Actualización",
                         f"Ocurrió un error al actualizar el servidor:\n{err}",
+                        parent=self.root,
                     ),
                 )
             finally:

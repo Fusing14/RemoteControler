@@ -1,7 +1,11 @@
 """
 Módulo de gestión del auto-arranque con Windows y creación de accesos directos.
-Configura el inicio automático mediante Registro de Windows (HKCU\\...\\Run) y
-mediante el Programador de Tareas (schtasks con elevación de privilegios /RL HIGHEST).
+Configura el inicio automático mediante:
+1. Registro de Windows (HKCU\\...\\Run) con rutas absolutas entrecomilladas.
+2. Programador de Tareas (schtasks con elevación /RL HIGHEST en ONLOGON y ONSTART pre-login)
+   para que el Host escuche peticiones de desbloqueo tanto en sesión iniciada como tras
+   un arranque en frío (Wake-on-LAN pre-login).
+Mitiga CWE-78 (sin interpolación de rutas en PowerShell) y CWE-426/427 (Unquoted Service Paths).
 """
 
 import logging
@@ -9,7 +13,8 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Optional
+
+from host.core.security.path_security import quote_executable_path, resolve_system_binary
 
 logger = logging.getLogger("RemoteControler.Autostart")
 
@@ -33,6 +38,7 @@ def create_desktop_shortcut() -> str:
     """
     Crea o actualiza un acceso directo en el Escritorio llamado 'SecureDeck Host.lnk'
     que apunta a Iniciar_SecureDeck.bat fijando el directorio de trabajo correcto.
+    Pasa las rutas mediante variables de entorno del proceso hijo para evitar CWE-78.
     """
     project_root = get_project_root()
     bat_path = project_root / "Iniciar_SecureDeck.bat"
@@ -44,20 +50,28 @@ def create_desktop_shortcut() -> str:
 
     if sys.platform == "win32":
         try:
-            ps_script = f"""
-            $ws = New-Object -ComObject WScript.Shell
-            $s = $ws.CreateShortcut('{str(shortcut_path)}')
-            $s.TargetPath = '{target}'
-            $s.Arguments = '{args}'
-            $s.WorkingDirectory = '{str(project_root)}'
-            $s.Description = 'SecureDeck Host - Control Remoto Seguro para Windows 11'
-            $s.IconLocation = 'shell32.dll,15'
-            $s.Save()
-            """
+            ps_bin = resolve_system_binary("powershell.exe")
+            ps_script = (
+                "$ws = New-Object -ComObject WScript.Shell; "
+                "$s = $ws.CreateShortcut($env:SD_SHORTCUT_PATH); "
+                "$s.TargetPath = $env:SD_TARGET_PATH; "
+                "$s.Arguments = $env:SD_ARGS; "
+                "$s.WorkingDirectory = $env:SD_WORK_DIR; "
+                "$s.Description = 'SecureDeck Host - Control Remoto Zero-Trust para Windows 11'; "
+                "$s.IconLocation = 'shell32.dll,15'; "
+                "$s.Save()"
+            )
+            env = os.environ.copy()
+            env["SD_SHORTCUT_PATH"] = str(shortcut_path)
+            env["SD_TARGET_PATH"] = str(target)
+            env["SD_ARGS"] = str(args)
+            env["SD_WORK_DIR"] = str(project_root)
+
             subprocess.run(
-                ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_script],
+                [ps_bin, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", ps_script],
                 check=True,
                 capture_output=True,
+                env=env,
                 timeout=10,
             )
             logger.info("Acceso directo creado exitosamente en: %s", shortcut_path)
@@ -66,8 +80,8 @@ def create_desktop_shortcut() -> str:
             logger.error("Error al crear acceso directo mediante PowerShell COM: %s", e)
             raise RuntimeError(f"Fallo al crear acceso directo en el escritorio: {e}") from e
     else:
-        # Fallback simulado para entornos fuera de Windows
-        shortcut_path.write_text(f"[Desktop Entry]\nExec={target}\nPath={project_root}\n")
+        shortcut_path.parent.mkdir(parents=True, exist_ok=True)
+        shortcut_path.write_text(f"[Desktop Entry]\nExec={target}\nPath={project_root}\n", encoding="utf-8")
         return str(shortcut_path)
 
 
@@ -99,8 +113,9 @@ def is_autostart_enabled() -> bool:
 
     # 2. Comprobar Programador de Tareas
     try:
+        schtasks_bin = resolve_system_binary("schtasks.exe")
         res = subprocess.run(
-            ["schtasks", "/Query", "/TN", "SecureDeckHostAutoStart"],
+            [schtasks_bin, "/Query", "/TN", "SecureDeckHostAutoStart"],
             capture_output=True,
             text=True,
             timeout=5,
@@ -115,23 +130,28 @@ def is_autostart_enabled() -> bool:
 
 def enable_autostart(minimized: bool = True) -> bool:
     """
-    Registra el inicio automático con Windows fijando siempre el directorio del proyecto:
+    Registra el inicio automático con Windows fijando siempre el directorio del proyecto
+    con rutas absolutas entrecomilladas (mitigación CWE-426 / CWE-427):
     1. Registro HKCU Run (ejecución al iniciar sesión).
-    2. Si es Administrador, registra una tarea programada con /RL HIGHEST para elevación automática.
+    2. Si es Administrador:
+       - Tarea programada 'SecureDeckHostAutoStart' (/SC ONLOGON /RL HIGHEST) para sesión interactiva elevada.
+       - Tarea programada 'SecureDeckHostBootStart' (/SC ONSTART /RU SYSTEM /RL HIGHEST) para escuchar
+         en la pantalla de pre-login tras encender el PC por Wake-on-LAN.
     """
     if sys.platform != "win32":
         return True
 
     project_root = get_project_root()
     bat_path = project_root / "Iniciar_SecureDeck.bat"
+    cmd_bin = resolve_system_binary("cmd.exe")
     arg_min = "--minimized" if minimized else ""
 
-    # Comando seguro fijando el directorio de trabajo
+    quoted_cmd = quote_executable_path(cmd_bin)
     if bat_path.exists():
-        run_cmd = f'cmd.exe /c "cd /d ""{project_root}"" && ""{bat_path}"" {arg_min}"'
+        run_cmd = f'{quoted_cmd} /c "cd /d ""{project_root}"" && ""{bat_path}"" {arg_min}"'
     else:
         py_exe = sys.executable
-        run_cmd = f'cmd.exe /c "cd /d ""{project_root}"" && ""{py_exe}"" -m host.main gui {arg_min}"'
+        run_cmd = f'{quoted_cmd} /c "cd /d ""{project_root}"" && ""{py_exe}"" -m host.main gui {arg_min}"'
 
     success = False
 
@@ -153,20 +173,25 @@ def enable_autostart(minimized: bool = True) -> bool:
     except Exception as e:
         logger.error("Error al registrar auto-arranque en Registro HKCU: %s", e)
 
-    # 2. Si cuenta con permisos de administrador, registrar tarea programada elevada
+    # 2. Si cuenta con permisos de administrador, registrar tareas programadas elevadas
     try:
         from host.engine.handlers.unlock import is_elevated_admin
         if is_elevated_admin():
-            task_target = str(bat_path) if bat_path.exists() else f'"{sys.executable}" -m host.main gui'
-            task_cmd = f'"{task_target}" {arg_min}'.strip()
-            res = subprocess.run(
+            schtasks_bin = resolve_system_binary("schtasks.exe")
+            if bat_path.exists():
+                task_action = f'{quoted_cmd} /c "cd /d ""{project_root}"" && ""{bat_path}"" {arg_min}"'
+            else:
+                task_action = f'{quoted_cmd} /c "cd /d ""{project_root}"" && ""{sys.executable}"" -m host.main gui {arg_min}"'
+
+            # 2a. Tarea ONLOGON con privilegios HIGHEST para tener acceso a Winlogon sin prompt UAC
+            res_logon = subprocess.run(
                 [
-                    "schtasks",
+                    schtasks_bin,
                     "/Create",
                     "/TN",
                     "SecureDeckHostAutoStart",
                     "/TR",
-                    f'cmd.exe /c "cd /d ""{project_root}"" && {task_cmd}"',
+                    task_action,
                     "/SC",
                     "ONLOGON",
                     "/RL",
@@ -177,11 +202,36 @@ def enable_autostart(minimized: bool = True) -> bool:
                 text=True,
                 timeout=10,
             )
-            if res.returncode == 0:
-                logger.info("Tarea programada SecureDeckHostAutoStart registrada con privilegios HIGHEST.")
+            if res_logon.returncode == 0:
+                logger.info("Tarea programada SecureDeckHostAutoStart (ONLOGON /RL HIGHEST) registrada.")
                 success = True
             else:
-                logger.warning("Fallo al registrar tarea programada: %s", res.stderr)
+                logger.warning("Fallo al registrar SecureDeckHostAutoStart: %s", res_logon.stderr)
+
+            # 2b. Tarea ONSTART (pre-login tras Cold Boot / Wake-on-LAN) en modo headless
+            boot_action = f'{quoted_cmd} /c "cd /d ""{project_root}"" && ""{sys.executable}"" -m host.main"'
+            res_boot = subprocess.run(
+                [
+                    schtasks_bin,
+                    "/Create",
+                    "/TN",
+                    "SecureDeckHostBootStart",
+                    "/TR",
+                    boot_action,
+                    "/SC",
+                    "ONSTART",
+                    "/RU",
+                    "NT AUTHORITY\\SYSTEM",
+                    "/RL",
+                    "HIGHEST",
+                    "/F",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if res_boot.returncode == 0:
+                logger.info("Tarea programada SecureDeckHostBootStart (ONSTART pre-login) registrada.")
     except Exception as ex:
         logger.debug("No se pudo registrar la tarea programada elevada: %s", ex)
 
@@ -214,14 +264,16 @@ def disable_autostart() -> bool:
     except Exception as e:
         logger.debug("Error al eliminar entrada del Registro HKCU: %s", e)
 
-    # 2. Eliminar Tarea Programada si existe
+    # 2. Eliminar Tareas Programadas si existen
     try:
-        subprocess.run(
-            ["schtasks", "/Delete", "/TN", "SecureDeckHostAutoStart", "/F"],
-            capture_output=True,
-            timeout=5,
-        )
-        logger.info("Tarea programada SecureDeckHostAutoStart eliminada.")
+        schtasks_bin = resolve_system_binary("schtasks.exe")
+        for task_name in ("SecureDeckHostAutoStart", "SecureDeckHostBootStart"):
+            subprocess.run(
+                [schtasks_bin, "/Delete", "/TN", task_name, "/F"],
+                capture_output=True,
+                timeout=5,
+            )
+        logger.info("Tareas programadas de auto-arranque eliminadas.")
     except Exception:
         pass
 

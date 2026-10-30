@@ -1,32 +1,117 @@
 """
 Registro de auditoría local inmutable y encadenado criptográficamente (Tamper-Evident Audit Log).
-Mitigación de Repudio y Manipulación Post-Incidente mediante encadenamiento HMAC-SHA256 y Windows DPAPI.
+Mitigación de Repudio y Manipulación Post-Incidente mediante encadenamiento HMAC-SHA256,
+Windows DPAPI y redacción automática de secretos en logs (CWE-312 / CWE-532).
 """
 
 import os
+import re
 import json
 import time
 import hmac
 import hashlib
+import logging
 import secrets
 from pathlib import Path
 from typing import Optional, Tuple, Dict, Any
 
 from host.core.storage.dpapi import protect_bytes, unprotect_bytes
 from host.core.crypto.canonical import canonicalize
+from host.core.security.path_security import enforce_restrictive_acls
 
 GENESIS_PREV_HASH = "0" * 64
+
+SENSITIVE_FIELD_NAMES = frozenset({
+    "password",
+    "pin",
+    "unlock_pin",
+    "pairing_token",
+    "token",
+    "private_key",
+    "host_private_key_der_hex",
+    "secret",
+    "credential",
+    "passphrase",
+})
+
+# Expresiones regulares para redactar secretos accidentales en cadenas de texto libre
+_SECRET_PATTERNS = [
+    re.compile(r'(?i)("?(?:password|pin|pairing_token|private_key|secret)"?\s*[:=]\s*)"[^"]*"'),
+    re.compile(r"(?i)('?(?:password|pin|pairing_token|private_key|secret)'?\s*[:=]\s*)'[^']*'"),
+    re.compile(r"(?i)(\b(?:password|pin|pairing_token|secret)\s*=\s*)[^\s,;)]+"),
+]
+
+
+def redact_sensitive_text(text: str) -> str:
+    """Enmascara cualquier PIN, contraseña, token o clave privada en un string de log."""
+    if not text:
+        return text
+    redacted = text
+    for pat in _SECRET_PATTERNS:
+        redacted = pat.sub(r'\1"***REDACTED***"', redacted)
+    return redacted
+
+
+def redact_sensitive_dict(data: Any) -> Any:
+    """Recorre recursivamente diccionarios y listas enmascarando campos sensibles."""
+    if isinstance(data, dict):
+        sanitized = {}
+        for k, v in data.items():
+            key_lower = str(k).strip().lower()
+            if key_lower in SENSITIVE_FIELD_NAMES or any(s in key_lower for s in ("password", "secret", "private_key", "pairing_token")):
+                sanitized[k] = "***REDACTED***"
+            else:
+                sanitized[k] = redact_sensitive_dict(v)
+        return sanitized
+    elif isinstance(data, list):
+        return [redact_sensitive_dict(item) for item in data]
+    elif isinstance(data, str):
+        return redact_sensitive_text(data)
+    return data
+
+
+class SensitiveDataRedactingFilter(logging.Filter):
+    """Filtro global para logging de Python que redacta automáticamente credenciales y tokens (CWE-532)."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            if isinstance(record.msg, str):
+                record.msg = redact_sensitive_text(record.msg)
+            if record.args:
+                if isinstance(record.args, dict):
+                    record.args = redact_sensitive_dict(record.args)
+                elif isinstance(record.args, tuple):
+                    record.args = tuple(
+                        redact_sensitive_text(a) if isinstance(a, str) else a
+                        for a in record.args
+                    )
+        except Exception:
+            pass
+        return True
+
+
+def install_log_redaction_filter() -> None:
+    """Instala el filtro de redacción de secretos en el logger raíz y sus handlers."""
+    root_logger = logging.getLogger()
+    redactor = SensitiveDataRedactingFilter()
+    if not any(isinstance(f, SensitiveDataRedactingFilter) for f in root_logger.filters):
+        root_logger.addFilter(redactor)
+    for handler in root_logger.handlers:
+        if not any(isinstance(f, SensitiveDataRedactingFilter) for f in handler.filters):
+            handler.addFilter(redactor)
 
 
 class AuditLogger:
     """
-    Gestor de registro de auditoría con encadenamiento criptográfico.
+    Gestor de registro de auditoría con encadenamiento criptográfico y redacción de secretos.
     
     Mitigación de Vectores de Ataque:
     1. Repudio: Registro inmutable de cada comando, estado de ejecución, timestamp e IP.
     2. Manipulación de Logs (Log Tampering): Cada línea incluye el hash de la línea previa
        y un HMAC-SHA256 sellado con una clave simétrica protegida por DPAPI. Cualquier
        eliminación, reordenamiento o alteración de registros invalida la cadena completa.
+    3. Exposición de Credenciales en Logs (CWE-532): Redacta automáticamente cualquier PIN,
+       contraseña o token antes de serializar y escribir en disco.
     """
 
     AUDIT_FILENAME = "audit.log"
@@ -59,6 +144,7 @@ class AuditLogger:
             key = secrets.token_bytes(32)  # Clave de 256 bits para HMAC-SHA256
             encrypted = protect_bytes(key, optional_entropy=self.secondary_entropy)
             self.key_path.write_bytes(encrypted)
+            enforce_restrictive_acls(self.key_path)
             return key
 
         encrypted = self.key_path.read_bytes()
@@ -98,16 +184,19 @@ class AuditLogger:
         details: Optional[Dict[str, Any]] = None,
     ) -> None:
         """
-        Registra un evento atómicamente al final del archivo de auditoría.
+        Registra un evento atómicamente al final del archivo de auditoría,
+        enmascarando cualquier secreto antes de persistir (CWE-532).
         """
         now = int(time.time())
         next_index = self._last_index + 1
         prev_hash = self._last_hash
 
+        safe_details = redact_sensitive_dict(details) if details else {}
+
         entry_data = {
             "client_ip": client_ip or "UNKNOWN",
             "command_id": command_id or "NONE",
-            "details": details or {},
+            "details": safe_details,
             "device_id": device_id or "ANONYMOUS",
             "event_type": event_type,
             "index": next_index,
@@ -175,11 +264,12 @@ def verify_audit_log_integrity(
             if entry.get("index") != expected_index:
                 return False, f"Línea {line_num}: Índice inconsistente (esperado {expected_index}, obtenido {entry.get('index')})."
 
-            # Comprobar encadenamiento de hash previo
-            if entry.get("prev_hash") != expected_prev_hash:
+            # Comprobar encadenamiento de hash previo en tiempo constante
+            prev_h = str(entry.get("prev_hash", ""))
+            if not hmac.compare_digest(prev_h.encode("ascii"), expected_prev_hash.encode("ascii")):
                 return False, (
                     f"Línea {line_num}: Rotura de cadena criptográfica (prev_hash alterado o registros eliminados). "
-                    f"Esperado: {expected_prev_hash}, Obtenido: {entry.get('prev_hash')}"
+                    f"Esperado: {expected_prev_hash}, Obtenido: {prev_h}"
                 )
 
             # Extraer y comprobar HMAC
@@ -192,7 +282,7 @@ def verify_audit_log_integrity(
             canonical_bytes = canonicalize(entry_to_verify)
             computed_hmac = hmac.new(hmac_key, canonical_bytes, hashlib.sha256).hexdigest()
 
-            if not hmac.compare_digest(recorded_hmac, computed_hmac):
+            if not hmac.compare_digest(str(recorded_hmac).encode("ascii"), computed_hmac.encode("ascii")):
                 return False, f"Línea {line_num}: HMAC inválido. Datos alterados o manipulados con posterioridad."
 
             # Calcular el hash que debe tener la siguiente línea como su prev_hash

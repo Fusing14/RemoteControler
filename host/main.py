@@ -22,7 +22,7 @@ from host.core.storage.device_store import TrustedDeviceStore
 from host.core.storage.pairing import PairingManager
 from host.core.security.anti_replay import AntiReplayValidator
 from host.core.security.rate_limiter import RateLimiter
-from host.core.audit.logger import AuditLogger, verify_audit_log_integrity
+from host.core.audit.logger import AuditLogger, verify_audit_log_integrity, install_log_redaction_filter
 from host.engine.dispatcher import CommandDispatcher
 from host.engine.handlers.unlock import set_unlock_pin, has_unlock_pin
 from host.transport.network_utils import (
@@ -37,6 +37,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 )
+install_log_redaction_filter()
 logger = logging.getLogger("RemoteControler.Main")
 
 

@@ -14,6 +14,8 @@ import sys
 import time
 from typing import List, Dict, Any, Optional
 
+from host.core.security.path_security import resolve_system_binary
+
 logger = logging.getLogger("RemoteControler.ProcessManager")
 
 # Procesos críticos del sistema operativo o componentes del entorno que nunca deben cerrarse
@@ -482,7 +484,8 @@ def close_running_app(pid: int, force: bool = False) -> Dict[str, Any]:
 
         # Enviar taskkill sin /F como segundo intento limpio si tenía ventanas ocultas
         try:
-            subprocess.run(["taskkill", "/PID", str(pid)], capture_output=True, text=True, timeout=3)
+            taskkill_bin = resolve_system_binary("taskkill.exe")
+            subprocess.run([taskkill_bin, "/PID", str(pid)], capture_output=True, text=True, timeout=3)
         except Exception as e:
             logger.debug("taskkill suave devolvió: %s", e)
 
@@ -501,10 +504,13 @@ def close_running_app(pid: int, force: bool = False) -> Dict[str, Any]:
 
         if not terminated:
             try:
-                res = subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True, text=True, timeout=3)
+                taskkill_bin = resolve_system_binary("taskkill.exe")
+                res = subprocess.run([taskkill_bin, "/F", "/PID", str(pid)], capture_output=True, text=True, timeout=3)
                 if res.returncode != 0 and "no encontrado" not in res.stderr.lower():
-                    raise AppCloseError(f"Fallo al forzar el cierre del PID {pid}: {res.stderr.strip()}")
+                    raise AppCloseError(f"Fallo al forzar el cierre del proceso PID {pid}.")
+            except AppCloseError:
+                raise
             except Exception as e:
-                raise AppCloseError(f"Error al terminar proceso: {e}") from e
+                raise AppCloseError("Error interno al terminar el proceso solicitado.") from e
 
         return {"pid": pid, "name": proc_name, "closed": True, "force": True}

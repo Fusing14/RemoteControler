@@ -4,11 +4,16 @@ Captura monitores individuales o el escritorio combinado completo y lo devuelve 
 """
 
 import base64
+import hashlib
 import io
 import logging
-from typing import Dict, Any, List
+import time
+from typing import Dict, Any, List, Optional
 
 logger = logging.getLogger("RemoteControler.ScreenHandler")
+
+# Caché ligera de último frame por configuración para evitar recomprimir frames estáticos (ahorro de CPU)
+_LAST_FRAME_CACHE: Dict[str, Dict[str, Any]] = {}
 
 
 class ScreenCaptureError(Exception):
@@ -106,9 +111,24 @@ def capture_screen_jpeg(
     from PIL import Image
     img.thumbnail((max_width, max_height), Image.Resampling.BILINEAR)
 
-    buffer = io.BytesIO()
-    img.save(buffer, format="JPEG", quality=quality, optimize=False)
-    b64_frame = base64.b64encode(buffer.getvalue()).decode("ascii")
+    cache_key = f"{selected_index}:{max_width}:{max_height}:{quality}"
+    raw_bytes = img.tobytes()
+    # Muestreo rápido de hash sobre el buffer redimensionado para detectar pantalla estática
+    frame_digest = hashlib.blake2b(raw_bytes[::4], digest_size=16).hexdigest()
+    now_ts = time.monotonic()
+
+    cached = _LAST_FRAME_CACHE.get(cache_key)
+    if cached and cached.get("digest") == frame_digest and (now_ts - cached.get("ts", 0.0)) < 2.0:
+        b64_frame = cached["b64_frame"]
+    else:
+        buffer = io.BytesIO()
+        img.save(buffer, format="JPEG", quality=quality, optimize=False)
+        b64_frame = base64.b64encode(buffer.getvalue()).decode("ascii")
+        _LAST_FRAME_CACHE[cache_key] = {
+            "digest": frame_digest,
+            "b64_frame": b64_frame,
+            "ts": now_ts,
+        }
 
     return {
         "frame": b64_frame,

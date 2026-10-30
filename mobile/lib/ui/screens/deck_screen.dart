@@ -46,6 +46,7 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
   late String _currentEndpoint = widget.hostEndpoint;
   Timer? _updateTimer;
   bool _isPlaying = true;
+  bool _hasHostStoredPin = false;
 
   // Estado del micrófono (Intercom en tiempo real)
   bool _isMicStreaming = false;
@@ -75,6 +76,7 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
 
     final km = widget.keyManager ?? widget.pairingClient.keyManager;
     await km.ensureInitialized();
+    final pinnedFp = await widget.pairingClient.getPairedCertFingerprint();
 
     final builder = EnvelopeBuilder(keyManager: km);
 
@@ -85,6 +87,7 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
       hostEndpoint: targetEndpoint,
       envelopeBuilder: builder,
       allowLoopback: widget.allowLoopback,
+      pinnedCertFingerprint: pinnedFp,
     );
 
     _stateSubscription = client.stateStream.listen((state) {
@@ -437,15 +440,44 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF10B981),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10)),
+                    ),
+                    icon: const Icon(Icons.bolt_rounded,
+                        color: Colors.white, size: 20),
+                    label: Text(
+                      _hasHostStoredPin
+                          ? 'Desbloqueo Rápido en 1 Toque (PIN DPAPI)'
+                          : 'Desbloquear con PIN guardado en Host',
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 13),
+                    ),
+                    onPressed: () async {
+                      Navigator.pop(ctx);
+                      await _sendCommand('UNLOCK_PC', {'use_stored_pin': true});
+                    },
+                  ),
+                ),
+                const SizedBox(height: 14),
+                const Divider(color: Color(0xFF1E2230)),
+                const SizedBox(height: 10),
                 const Text(
-                  'Introduce tu PIN de Windows Hello o contraseña de Windows para autenticar y desbloquear:',
+                  'O introduce tu PIN de Windows Hello / contraseña manualmente:',
                   style: TextStyle(color: Color(0xFF94A3B8), fontSize: 13),
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: 12),
                 TextField(
                   controller: passwordController,
                   obscureText: obscureText,
-                  autofocus: true,
+                  autofocus: false,
                   style: const TextStyle(color: Colors.white, fontSize: 14),
                   decoration: InputDecoration(
                     hintText: 'PIN o Contraseña de Windows',
@@ -650,12 +682,38 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
         if (data != null) {
           final mac = data['mac_address'] as String?;
           final bcast = data['broadcast_ip'] as String?;
+          final lanIp = data['lan_ip'] as String?;
+          final certFp = data['cert_fingerprint'] as String?;
+          final hasStoredPin = data['has_stored_pin'] as bool? ?? false;
+
+          if (mounted) {
+            setState(() {
+              _hasHostStoredPin = hasStoredPin;
+            });
+          }
+
           if (mac != null && mac.trim().isNotEmpty) {
             await widget.pairingClient.savePairedMacAddress(mac.trim());
           }
           if (bcast != null && bcast.trim().isNotEmpty) {
             await widget.pairingClient.savePairedBroadcastIp(bcast.trim());
           }
+          if (lanIp != null && lanIp.trim().isNotEmpty) {
+            await widget.pairingClient.savePairedLanIp(lanIp.trim());
+          }
+          if (certFp != null && certFp.trim().isNotEmpty) {
+            await widget.pairingClient.savePairedCertFingerprint(certFp.trim());
+          }
+
+          final devId = await widget.pairingClient.getPairedHostDeviceId() ?? '';
+          await _savedHostsService.addOrUpdateHost(
+            endpoint: _currentEndpoint,
+            deviceId: devId,
+            macAddress: mac?.trim(),
+            broadcastIp: bcast?.trim(),
+            lanIp: lanIp?.trim(),
+            certFingerprint: certFp?.trim(),
+          );
         }
       }
     } catch (e) {
@@ -666,6 +724,7 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
   Future<void> _wakeOnLan() async {
     String? mac = await widget.pairingClient.getPairedMacAddress();
     final bcast = await widget.pairingClient.getPairedBroadcastIp();
+    final lanIp = await widget.pairingClient.getPairedLanIp();
 
     if (mac == null || mac.trim().isEmpty) {
       if (!mounted) return;
@@ -736,29 +795,69 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
     }
 
     try {
-      await WolService.wake(
-        macAddress: mac,
-        broadcastIp: bcast,
-        hostIpOrEndpoint: _currentEndpoint,
-      );
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            backgroundColor: const Color(0xFF10B981),
+            backgroundColor: const Color(0xFF1E2230),
             content: Row(
               children: [
-                const Icon(Icons.bolt_rounded, color: Colors.white, size: 20),
+                const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: Color(0xFF10B981)),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    'Enviando ráfagas Multi-Ruta WoL a $mac (puertos 7, 9, 40000)...',
+                    style: const TextStyle(
+                        color: Colors.white, fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ],
+            ),
+            duration: const Duration(seconds: 4),
+          ),
+        );
+      }
+
+      final wokeUp = await WolService.wakeWithRetryAndPolling(
+        macAddress: mac,
+        broadcastIp: bcast,
+        lanIp: lanIp,
+        hostIpOrEndpoint: _currentEndpoint,
+      );
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        if (wokeUp) {
+          await _controlClient?.ensureConnected();
+        }
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            backgroundColor:
+                wokeUp ? const Color(0xFF10B981) : const Color(0xFF0EA5E9),
+            content: Row(
+              children: [
+                Icon(
+                  wokeUp ? Icons.check_circle_rounded : Icons.bolt_rounded,
+                  color: Colors.white,
+                  size: 20,
+                ),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    'Paquete Mágico Wake-on-LAN transmitido a $mac',
+                    wokeUp
+                        ? '¡PC encendido y en línea! Conectado a $_currentEndpoint'
+                        : 'Ráfagas Magic Packet enviadas a $mac (LAN + Broadcast + Tailscale). Arrancando PC...',
                     style: const TextStyle(
                         color: Colors.white, fontWeight: FontWeight.bold),
                   ),
                 ),
               ],
             ),
-            duration: const Duration(seconds: 3),
+            duration: const Duration(seconds: 4),
           ),
         );
       }
@@ -1037,15 +1136,6 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
                         hasError = true;
                         statusText =
                             'Error al actualizar: ${event.value ?? event.status.name}';
-                      });
-                      break;
-                    default:
-                      debugPrint(
-                          '[OTA] Estado no controlado: ${event.status.name} (valor: ${event.value})');
-                      safeSetState(() {
-                        hasError = true;
-                        statusText =
-                            'Estado: ${event.status.name} (${event.value ?? ""})';
                       });
                       break;
                   }

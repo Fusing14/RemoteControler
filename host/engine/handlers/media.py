@@ -95,15 +95,30 @@ def _get_user32():
     return user32
 
 
+# Lista blanca cerrada de códigos de tecla virtuales multimedia (mitigación CWE-20)
+ALLOWED_MEDIA_VK_CODES = frozenset({
+    VK_VOLUME_MUTE,
+    VK_VOLUME_DOWN,
+    VK_VOLUME_UP,
+    VK_MEDIA_NEXT_TRACK,
+    VK_MEDIA_PREV_TRACK,
+    VK_MEDIA_STOP,
+    VK_MEDIA_PLAY_PAUSE,
+})
+
+
 def send_virtual_key(vk_code: int) -> None:
     """
     Envía un evento de pulsación y liberación atómica de una tecla virtual mediante SendInput.
     Si SendInput es bloqueado o retorna 0, usa keybd_event como fallback seguro.
     
-    Mitigación de Vectores de Ataque:
-    - Previene inyecciones de comandos: No se generan cadenas de teclado de texto,
-      solo códigos de tecla física predefinidos en una lista blanca inmutable.
+    Mitigación de Vectores de Ataque (CWE-20):
+    - Previene inyecciones de comandos: Valida que vk_code pertenezca estrictamente a
+      ALLOWED_MEDIA_VK_CODES antes de tocar la API de teclado del sistema.
     """
+    if not isinstance(vk_code, int) or vk_code not in ALLOWED_MEDIA_VK_CODES:
+        raise MediaExecutionError(f"Código de tecla virtual no autorizado para control multimedia: {vk_code}")
+
     user32 = _get_user32()
 
     # Preparar pulsación (Key Down)

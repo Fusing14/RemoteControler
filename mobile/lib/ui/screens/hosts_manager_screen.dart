@@ -87,22 +87,35 @@ class _HostsManagerScreenState extends State<HostsManagerScreen> {
     }
 
     try {
-      await WolService.wake(
+      final wokeUp = await WolService.wakeWithRetryAndPolling(
         macAddress: mac,
         broadcastIp: host.broadcastIp,
+        lanIp: host.lanIp,
         hostIpOrEndpoint: host.endpoint,
       );
       if (mounted) {
+        if (wokeUp) {
+          setState(() {
+            _pingStatus[host.id] = true;
+          });
+        }
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            backgroundColor: const Color(0xFF10B981),
+            backgroundColor:
+                wokeUp ? const Color(0xFF10B981) : const Color(0xFF0EA5E9),
             content: Row(
               children: [
-                const Icon(Icons.bolt_rounded, color: Colors.white, size: 20),
+                Icon(
+                  wokeUp ? Icons.check_circle_rounded : Icons.bolt_rounded,
+                  color: Colors.white,
+                  size: 20,
+                ),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    'Paquete Mágico WoL transmitido a "${host.customName}" ($mac)',
+                    wokeUp
+                        ? '¡"${host.customName}" está encendido y en línea!'
+                        : 'Paquete Mágico WoL Multi-Ruta transmitido a "${host.customName}" ($mac)',
                     style: const TextStyle(
                         color: Colors.white, fontWeight: FontWeight.bold),
                   ),

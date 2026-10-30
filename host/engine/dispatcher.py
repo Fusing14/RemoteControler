@@ -30,7 +30,7 @@ from host.engine.contracts.commands import (
     MediaPreviousPayload,
 )
 import socket
-from host.core.network.wol import get_primary_physical_mac, get_broadcast_ip
+from host.core.network.wol import get_primary_physical_mac, get_broadcast_ip, get_lan_ip
 from host.engine.contracts.envelope import SignedEnvelope
 from host.core.storage.device_store import TrustedDeviceStore
 from host.core.security.anti_replay import AntiReplayValidator
@@ -74,6 +74,7 @@ from host.engine.handlers.camera import capture_camera_jpeg, CameraCaptureError
 from host.engine.handlers.audio_stream import play_audio_chunk, AudioStreamError
 from host.engine.handlers.unlock import (
     execute_unlock_pc,
+    has_unlock_pin,
     UnlockAuthenticationError,
     UnlockExecutionError,
 )
@@ -208,7 +209,12 @@ class CommandDispatcher:
                 extra_data = {"played": True}
             elif envelope.command_id == CommandCatalog.UNLOCK_PC:
                 assert isinstance(parsed_payload, UnlockPcPayload)
-                execute_unlock_pc(parsed_payload.password, parsed_payload.username)
+                unlock_res = execute_unlock_pc(
+                    parsed_payload.password,
+                    parsed_payload.username,
+                    use_stored_pin=parsed_payload.use_stored_pin,
+                )
+                extra_data = unlock_res if isinstance(unlock_res, dict) else {"unlock_status": "UNLOCK_SUCCESS", "locked": False}
             elif envelope.command_id == CommandCatalog.APPS_LIST:
                 apps = scan_installed_apps()
                 if parsed_payload.query:
@@ -231,11 +237,16 @@ class CommandDispatcher:
                 assert isinstance(parsed_payload, HostInfoPayload)
                 mac = get_primary_physical_mac()
                 bcast = get_broadcast_ip()
+                lan_ip = get_lan_ip()
                 dev_name = socket.gethostname()
+                cert_fp = self.device_store.get_host_cert_fingerprint() or ""
                 extra_data = {
                     "mac_address": mac,
                     "broadcast_ip": bcast,
+                    "lan_ip": lan_ip,
                     "device_name": dev_name,
+                    "cert_fingerprint": cert_fp,
+                    "has_stored_pin": has_unlock_pin(),
                 }
             elif envelope.command_id == CommandCatalog.MEDIA_NEXT:
                 assert isinstance(parsed_payload, MediaNextPayload)
@@ -287,7 +298,7 @@ class CommandDispatcher:
             return ExecutionResult(
                 status=ExecutionStatus.ERROR,
                 command_id=envelope.command_id.value,
-                message=str(e),
+                message="Operación denegada: Proceso protegido del sistema operativo.",
                 error_code="APP_CLOSE_FORBIDDEN"
             )
         except AppCloseError as e:
@@ -295,7 +306,7 @@ class CommandDispatcher:
             return ExecutionResult(
                 status=ExecutionStatus.ERROR,
                 command_id=envelope.command_id.value,
-                message=str(e),
+                message="No se pudo cerrar la aplicación solicitada.",
                 error_code="APP_CLOSE_FAILED"
             )
         except (MediaExecutionError, PowerExecutionError, AppLaunchError, ScreenCaptureError, CameraCaptureError, AudioStreamError, UnlockExecutionError) as e:

@@ -26,6 +26,14 @@ build/
 *.priv
 *.p12
 *.pfx
+*.dat
+*.db
+*.sqlite
+*.sqlite3
+*.log
+logs/
+vault/
+.securedeck_vault/
 secrets/
 config.local.json
 

@@ -11,6 +11,8 @@ import sys
 from pathlib import Path
 from typing import Any, Dict
 
+from host.core.security.path_security import enforce_restrictive_acls, quote_executable_path
+
 logger = logging.getLogger("RemoteControler.HostConfig")
 
 REG_RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
@@ -69,12 +71,13 @@ class HostConfig:
         return self._data
 
     def save(self) -> None:
-        """Guarda la configuración actual en disco de forma atómica."""
+        """Guarda la configuración actual en disco de forma atómica con permisos restrictivos."""
         try:
             self.config_path.parent.mkdir(parents=True, exist_ok=True)
             temp_path = self.config_path.with_suffix(".tmp")
             temp_path.write_text(json.dumps(self._data, indent=2), encoding="utf-8")
             temp_path.replace(self.config_path)
+            enforce_restrictive_acls(self.config_path)
         except Exception as e:
             logger.error("Error guardando host_config.json: %s", e)
 
@@ -137,14 +140,14 @@ def set_windows_auto_start(enabled: bool) -> bool:
 
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, REG_RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
             if enabled:
-                # Construir comando con pythonw si está disponible para evitar ventana de consola
                 py_exe = sys.executable
                 if "python.exe" in py_exe.lower():
                     pyw_exe = py_exe.lower().replace("python.exe", "pythonw.exe")
                     if os.path.exists(pyw_exe):
                         py_exe = pyw_exe
 
-                cmd = f'"{py_exe}" -m host.main gui --minimized'
+                quoted_py = quote_executable_path(py_exe)
+                cmd = f"{quoted_py} -m host.main gui --minimized"
                 winreg.SetValueEx(key, REG_APP_NAME, 0, winreg.REG_SZ, cmd)
                 logger.info("Auto-arranque en Windows registrado: %s", cmd)
             else:

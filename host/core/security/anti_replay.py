@@ -1,8 +1,11 @@
 """
-Módulo de protección Anti-Replay y validación de frescura temporal.
-Mitiga ataques de repetición mediante ventana deslizante y caché de nonces con auto-expiración.
+Módulo de protección Anti-Replay y validación de frescura temporal (CWE-294).
+Mitiga ataques de repetición mediante ventana deslizante (±30s), caché acotada de nonces
+con auto-expiración y verificación HMAC-SHA256 en tiempo constante.
 """
 
+import hashlib
+import hmac
 import time
 import threading
 from typing import Dict, Optional
@@ -15,15 +18,17 @@ class AntiReplayValidator:
     Gestor de validación de marcas temporales y nonces únicos.
     
     Mitigación de Vectores de Ataque:
-    1. Replay Attacks: Impide la retransmisión de paquetes previamente firmados mediante
-       un almacén de nonces con TTL acotado.
-    2. Delayed Execution: Descarta comandos transmitidos fuera de la ventana de sincronización.
+    1. Replay Attacks (CWE-294): Impide la retransmisión de paquetes previamente firmados
+       (ej. UNLOCK_PC o SYS_POWER) mediante un almacén de nonces con TTL acotado.
+    2. Delayed Execution: Descarta comandos transmitidos fuera de la ventana de sincronización (±30s).
+    3. Memory Exhaustion DoS (CWE-400): Acota el número máximo de nonces en memoria.
     """
 
     def __init__(
         self,
         max_clock_skew_seconds: int = 30,
         nonce_ttl_seconds: int = 60,
+        max_cache_size: int = 10000,
     ) -> None:
         """
         :param max_clock_skew_seconds: Desfase máximo permitido entre el reloj del cliente y el host (segundos).
@@ -31,6 +36,7 @@ class AntiReplayValidator:
                                   Debe ser estrictamente superior a 2 * max_clock_skew_seconds
                                   para garantizar que un nonce caduque solo cuando la marca de tiempo
                                   ya esté fuera de la ventana aceptable.
+        :param max_cache_size: Capacidad máxima de nonces simultáneos en caché contra DoS de memoria.
         """
         if nonce_ttl_seconds < max_clock_skew_seconds * 2:
             raise ValueError(
@@ -39,6 +45,7 @@ class AntiReplayValidator:
 
         self.max_clock_skew_seconds = max_clock_skew_seconds
         self.nonce_ttl_seconds = nonce_ttl_seconds
+        self.max_cache_size = max_cache_size
         self._lock = threading.Lock()
         # Mapeo: nonce -> timestamp de expiración (float Unix Epoch)
         self._seen_nonces: Dict[str, float] = {}
@@ -48,6 +55,13 @@ class AntiReplayValidator:
         expired = [nonce for nonce, exp in self._seen_nonces.items() if exp <= current_time]
         for nonce in expired:
             del self._seen_nonces[nonce]
+
+        # Si aún supera max_cache_size, expulsar los nonces más próximos a expirar
+        if len(self._seen_nonces) >= self.max_cache_size:
+            sorted_nonces = sorted(self._seen_nonces.items(), key=lambda kv: kv[1])
+            to_evict = len(self._seen_nonces) - self.max_cache_size + 1
+            for k, _ in sorted_nonces[:to_evict]:
+                del self._seen_nonces[k]
 
     def validate_timestamp(self, timestamp_utc: int, current_time: Optional[float] = None) -> None:
         """
@@ -66,6 +80,9 @@ class AntiReplayValidator:
         Verifica si el nonce ya reside en la caché sin registrarlo aún.
         Lanza ReplayAttackDetectedError si ya fue visto.
         """
+        if not nonce or not nonce.strip():
+            raise ReplayAttackDetectedError("Nonce vacío o ausente.")
+
         now = current_time if current_time is not None else time.time()
         with self._lock:
             self._cleanup_expired(now)
@@ -78,6 +95,7 @@ class AntiReplayValidator:
         """Registra el nonce en la caché una vez que la firma criptográfica ha sido validada."""
         now = current_time if current_time is not None else time.time()
         with self._lock:
+            self._cleanup_expired(now)
             self._seen_nonces[nonce] = now + self.nonce_ttl_seconds
 
     def record_and_verify_nonce(self, nonce: str, current_time: Optional[float] = None) -> None:
@@ -85,6 +103,9 @@ class AntiReplayValidator:
         Comprueba que el nonce no haya sido visto. Si es nuevo, lo almacena con su TTL.
         Lanza ReplayAttackDetectedError si el nonce ya existe en la caché.
         """
+        if not nonce or not nonce.strip():
+            raise ReplayAttackDetectedError("Nonce vacío o ausente.")
+
         now = current_time if current_time is not None else time.time()
 
         with self._lock:
@@ -107,6 +128,17 @@ class AntiReplayValidator:
         now = current_time if current_time is not None else time.time()
         self.validate_timestamp(timestamp_utc, current_time=now)
         self.record_and_verify_nonce(nonce, current_time=now)
+
+    @staticmethod
+    def compute_session_hmac(session_secret: bytes, canonical_payload: bytes) -> str:
+        """Calcula la firma HMAC-SHA256 vinculada a una sesión activa."""
+        return hmac.new(session_secret, canonical_payload, hashlib.sha256).hexdigest()
+
+    @staticmethod
+    def verify_session_hmac(session_secret: bytes, canonical_payload: bytes, received_hmac_hex: str) -> bool:
+        """Verifica en tiempo constante (hmac.compare_digest) el HMAC-SHA256 de un mensaje."""
+        expected = hmac.new(session_secret, canonical_payload, hashlib.sha256).hexdigest()
+        return hmac.compare_digest(expected.encode("ascii"), received_hmac_hex.strip().lower().encode("ascii"))
 
     @property
     def active_nonces_count(self) -> int:

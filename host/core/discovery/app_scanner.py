@@ -117,8 +117,8 @@ def scan_installed_apps(custom_dirs: Optional[List[Path | str]] = None) -> List[
 
 def launch_system_app(target_path: Optional[str] = None, app_id: Optional[str] = None) -> bool:
     """
-    Lanza de forma segura una aplicación del sistema usando ShellExecuteW o os.startfile.
-    Verifica que el archivo exista y sea un acceso directo o ejecutable.
+    Lanza de forma segura una aplicación del sistema usando os.startfile.
+    Mitiga CWE-78 y CWE-22 rechazando rutas UNC, Path Traversal ('..') y extensiones no autorizadas.
     """
     resolved_path: Optional[str] = target_path
 
@@ -131,8 +131,12 @@ def launch_system_app(target_path: Optional[str] = None, app_id: Optional[str] =
     if not resolved_path:
         raise ValueError("No se especificó una aplicación válida para iniciar.")
 
-    path_obj = Path(resolved_path)
-    if not path_obj.exists():
+    raw_str = str(resolved_path).strip()
+    if ".." in raw_str or raw_str.startswith("\\\\") or any(c in raw_str for c in ("\r", "\n", "\0", "|", ";", "&", "`")):
+        raise ValueError("Ruta de aplicación rechazada por política de seguridad Zero-Trust.")
+
+    path_obj = Path(raw_str)
+    if not path_obj.exists() or not path_obj.is_file():
         raise FileNotFoundError(f"La aplicación solicitada no existe en disco: {resolved_path}")
 
     ext = path_obj.suffix.lower()
