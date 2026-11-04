@@ -10,6 +10,8 @@ import logging
 import time
 from typing import Dict, Any, List, Optional
 
+from host.engine.handlers.mouse import make_process_dpi_aware, execute_mouse_click
+
 logger = logging.getLogger("RemoteControler.ScreenHandler")
 
 # Caché ligera de último frame por configuración para evitar recomprimir frames estáticos (ahorro de CPU)
@@ -36,6 +38,8 @@ def capture_screen_jpeg(
     monitor_count = 1
     selected_index = 1
     monitors_info: List[Dict[str, Any]] = []
+
+    make_process_dpi_aware()
 
     # 1. Intentar captura de alta velocidad con MSS
     try:

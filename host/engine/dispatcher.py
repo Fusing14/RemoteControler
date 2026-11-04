@@ -28,6 +28,7 @@ from host.engine.contracts.commands import (
     HostInfoPayload,
     MediaNextPayload,
     MediaPreviousPayload,
+    MouseClickPayload,
 )
 import socket
 from host.core.network.wol import get_primary_physical_mac, get_broadcast_ip, get_lan_ip
@@ -70,6 +71,7 @@ from host.engine.handlers.apps import (
     AppLaunchError,
 )
 from host.engine.handlers.screen import capture_screen_jpeg, ScreenCaptureError
+from host.engine.handlers.mouse import execute_mouse_click, MouseExecutionError
 from host.engine.handlers.camera import capture_camera_jpeg, CameraCaptureError
 from host.engine.handlers.audio_stream import play_audio_chunk, AudioStreamError
 from host.engine.handlers.unlock import (
@@ -254,6 +256,14 @@ class CommandDispatcher:
             elif envelope.command_id == CommandCatalog.MEDIA_PREVIOUS:
                 assert isinstance(parsed_payload, MediaPreviousPayload)
                 extra_data = self.media_handler.media_previous()
+            elif envelope.command_id in (CommandCatalog.MOUSE_CLICK, CommandCatalog.SCREEN_INTERACT):
+                assert isinstance(parsed_payload, MouseClickPayload)
+                extra_data = execute_mouse_click(
+                    x_norm=parsed_payload.x,
+                    y_norm=parsed_payload.y,
+                    button=parsed_payload.button,
+                    monitor_index=parsed_payload.monitor_index if parsed_payload.monitor_index is not None else 1,
+                )
             else:
                 raise ValueError(f"Comando no soportado: {envelope.command_id}")
 
@@ -275,6 +285,8 @@ class CommandDispatcher:
                 success_msg = "Pista siguiente reproducida exitosamente."
             elif envelope.command_id == CommandCatalog.MEDIA_PREVIOUS:
                 success_msg = "Pista anterior reproducida exitosamente."
+            elif envelope.command_id in (CommandCatalog.MOUSE_CLICK, CommandCatalog.SCREEN_INTERACT):
+                success_msg = f"Interacción de ratón ({extra_data.get('button')}) ejecutada en ({extra_data.get('target_x')}, {extra_data.get('target_y')})."
             else:
                 success_msg = f"Comando {envelope.command_id.value} ejecutado exitosamente."
 

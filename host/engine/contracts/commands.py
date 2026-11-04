@@ -6,7 +6,7 @@ Queda terminantemente prohibido el paso de strings arbitrarios de ejecución.
 
 from enum import Enum
 import urllib.parse
-from typing import Optional, Union, Dict, Any
+from typing import Optional, Union, Dict, Any, Literal
 from pydantic import BaseModel, Field, model_validator, ConfigDict
 
 
@@ -28,6 +28,8 @@ class CommandCatalog(str, Enum):
     HOST_INFO = "HOST_INFO"
     MEDIA_NEXT = "MEDIA_NEXT"
     MEDIA_PREVIOUS = "MEDIA_PREVIOUS"
+    MOUSE_CLICK = "MOUSE_CLICK"
+    SCREEN_INTERACT = "SCREEN_INTERACT"
 
 
 class MediaAction(str, Enum):
@@ -354,6 +356,43 @@ class MediaPreviousPayload(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
+MouseButtonAction = Literal["left", "right", "middle", "double_left", "move"]
+
+
+class MouseClickPayload(BaseModel):
+    """
+    Payload para interacción de ratón en pantalla con precisión milimétrica (1:1).
+    Validación estricta de rangos normalizados [0.0, 1.0].
+    """
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    x: float = Field(
+        ...,
+        ge=0.0,
+        le=1.0,
+        description="Coordenada horizontal normalizada (0.0 = izquierda, 1.0 = derecha)."
+    )
+    y: float = Field(
+        ...,
+        ge=0.0,
+        le=1.0,
+        description="Coordenada vertical normalizada (0.0 = arriba, 1.0 = abajo)."
+    )
+    button: MouseButtonAction = Field(
+        default="left",
+        description="Acción de ratón ('left', 'right', 'middle', 'double_left', 'move')."
+    )
+    monitor_index: Optional[int] = Field(
+        default=1,
+        ge=0,
+        le=16,
+        description="Índice del monitor objetivo (0 = todas, 1..N = monitor específico)."
+    )
+
+
+ScreenInteractPayload = MouseClickPayload
+
+
 CommandPayloadType = Union[
     MediaPayload,
     PowerPayload,
@@ -371,6 +410,7 @@ CommandPayloadType = Union[
     HostInfoPayload,
     MediaNextPayload,
     MediaPreviousPayload,
+    MouseClickPayload,
 ]
 
 COMMAND_PAYLOAD_SCHEMA_MAP: Dict[CommandCatalog, type[BaseModel]] = {
@@ -390,6 +430,8 @@ COMMAND_PAYLOAD_SCHEMA_MAP: Dict[CommandCatalog, type[BaseModel]] = {
     CommandCatalog.HOST_INFO: HostInfoPayload,
     CommandCatalog.MEDIA_NEXT: MediaNextPayload,
     CommandCatalog.MEDIA_PREVIOUS: MediaPreviousPayload,
+    CommandCatalog.MOUSE_CLICK: MouseClickPayload,
+    CommandCatalog.SCREEN_INTERACT: MouseClickPayload,
 }
 
 

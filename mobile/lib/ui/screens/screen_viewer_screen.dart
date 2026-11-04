@@ -2,8 +2,10 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../transport/control_client.dart';
+import '../utils/touch_coordinate_mapper.dart';
 
 /// Pantalla para visualización del escritorio del PC en tiempo real con zoom interactivo
 /// y soporte dinámico para múltiples monitores (Pantalla 1, Pantalla 2, Todas).
@@ -32,8 +34,14 @@ class _ScreenViewerScreenState extends State<ScreenViewerScreen>
   String? _errorMessage;
   int _monitorIndex = 1;
   int _monitorCount = 1;
+  int _imageWidth = 1280;
+  int _imageHeight = 720;
   final TransformationController _transformationController =
       TransformationController();
+
+  // Lista de efectos visuales táctiles (ripple pulsante)
+  final List<ClickRippleEffect> _ripples = [];
+  Timer? _rippleTimer;
 
   @override
   void initState() {
@@ -45,6 +53,7 @@ class _ScreenViewerScreenState extends State<ScreenViewerScreen>
   @override
   void dispose() {
     _isStreaming = false;
+    _rippleTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     _transformationController.dispose();
     super.dispose();
@@ -90,12 +99,18 @@ class _ScreenViewerScreenState extends State<ScreenViewerScreen>
           final data = res['data'] as Map<String, dynamic>?;
           final frameB64 = data?['frame'] as String?;
           final detectedCount = data?['monitor_count'] as int? ?? 1;
+          final w = data?['width'] as int?;
+          final h = data?['height'] as int?;
 
           if (frameB64 != null && mounted) {
             final bytes = base64Decode(frameB64);
             setState(() {
               _currentFrame = bytes;
               _monitorCount = detectedCount;
+              if (w != null && h != null && w > 0 && h > 0) {
+                _imageWidth = w;
+                _imageHeight = h;
+              }
               _latencyMs = stopwatch.elapsedMilliseconds;
               _isLoading = false;
               _errorMessage = null;
@@ -137,6 +152,74 @@ class _ScreenViewerScreenState extends State<ScreenViewerScreen>
 
   void _resetZoom() {
     _transformationController.value = Matrix4.identity();
+  }
+
+  void _triggerRipple(Offset screenPosition, Color color) {
+    final ripple = ClickRippleEffect(position: screenPosition, color: color);
+    setState(() {
+      _ripples.add(ripple);
+    });
+
+    _rippleTimer?.cancel();
+    _rippleTimer = Timer.periodic(const Duration(milliseconds: 16), (timer) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      final now = DateTime.now();
+      _ripples
+          .removeWhere((r) => now.difference(r.startTime).inMilliseconds > 450);
+      if (_ripples.isEmpty) {
+        timer.cancel();
+        _rippleTimer = null;
+      }
+      setState(() {});
+    });
+  }
+
+  void _handleTouch({
+    required Offset localPosition,
+    required Size containerSize,
+    required String button,
+    required Color feedbackColor,
+  }) {
+    // 1. Convertir coordenadas locales a escena (deshaciendo zoom y pan de InteractiveViewer)
+    final scenePoint = _transformationController.toScene(localPosition);
+
+    // 2. Mapear a coordenadas normalizadas [0.0, 1.0] compensando letterboxing/pillarboxing
+    final normPoint = TouchCoordinateMapper.calculateNormalizedCoordinates(
+      touchX: scenePoint.dx,
+      touchY: scenePoint.dy,
+      containerWidth: containerSize.width,
+      containerHeight: containerSize.height,
+      imageWidth: _imageWidth.toDouble(),
+      imageHeight: _imageHeight.toDouble(),
+    );
+
+    // Si el toque cayó en las bandas negras de BoxFit.contain, se ignora
+    if (normPoint == null) {
+      return;
+    }
+
+    // 3. Feedback visual instantáneo exactamente en la posición tocada de la pantalla
+    _triggerRipple(localPosition, feedbackColor);
+
+    // 4. Inyección remota de ratón con coordenadas [0.0, 1.0]
+    _sendMouseClick(normPoint.x, normPoint.y, button);
+  }
+
+  Future<void> _sendMouseClick(
+      double xNorm, double yNorm, String button) async {
+    try {
+      await widget.controlClient.sendMouseClick(
+        x: xNorm,
+        y: yNorm,
+        button: button,
+        monitorIndex: _monitorIndex,
+      );
+    } catch (e) {
+      debugPrint('Error enviando interacción de ratón: $e');
+    }
   }
 
   void _selectMonitor(int index) {
@@ -371,19 +454,130 @@ class _ScreenViewerScreenState extends State<ScreenViewerScreen>
                         ],
                       ),
                     )
-                  : InteractiveViewer(
-                      transformationController: _transformationController,
-                      minScale: 0.5,
-                      maxScale: 5.0,
-                      boundaryMargin: const EdgeInsets.all(32),
-                      child: Image.memory(
-                        _currentFrame!,
-                        gaplessPlayback: true,
-                        fit: BoxFit.contain,
-                      ),
+                  : LayoutBuilder(
+                      builder: (context, constraints) {
+                        final containerSize =
+                            Size(constraints.maxWidth, constraints.maxHeight);
+
+                        return GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTapUp: (details) {
+                            _handleTouch(
+                              localPosition: details.localPosition,
+                              containerSize: containerSize,
+                              button: 'left',
+                              feedbackColor:
+                                  const Color(0xFF06B6D4), // Cyan brillante
+                            );
+                          },
+                          onDoubleTapDown: (details) {
+                            _handleTouch(
+                              localPosition: details.localPosition,
+                              containerSize: containerSize,
+                              button: 'double_left',
+                              feedbackColor: const Color(
+                                  0xFF10B981), // Esmeralda brillante
+                            );
+                          },
+                          onLongPressStart: (details) {
+                            HapticFeedback.mediumImpact();
+                            _handleTouch(
+                              localPosition: details.localPosition,
+                              containerSize: containerSize,
+                              button: 'right',
+                              feedbackColor:
+                                  const Color(0xFF8B5CF6), // Violeta brillante
+                            );
+                          },
+                          child: Stack(
+                            fit: StackFit.expand,
+                            children: [
+                              InteractiveViewer(
+                                transformationController:
+                                    _transformationController,
+                                minScale: 0.5,
+                                maxScale: 5.0,
+                                boundaryMargin: const EdgeInsets.all(32),
+                                child: Image.memory(
+                                  _currentFrame!,
+                                  gaplessPlayback: true,
+                                  fit: BoxFit.contain,
+                                  width: containerSize.width,
+                                  height: containerSize.height,
+                                ),
+                              ),
+                              if (_ripples.isNotEmpty)
+                                Positioned.fill(
+                                  child: IgnorePointer(
+                                    child: CustomPaint(
+                                      painter: RipplePainter(ripples: _ripples),
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          ),
+                        );
+                      },
                     ),
         ),
       ),
     );
   }
+}
+
+/// Modelo de datos para feedback visual táctil reactivo.
+class ClickRippleEffect {
+  final Offset position;
+  final Color color;
+  final double maxRadius;
+  final DateTime startTime;
+
+  ClickRippleEffect({
+    required this.position,
+    required this.color,
+    this.maxRadius = 32.0,
+    DateTime? startTime,
+  }) : startTime = startTime ?? DateTime.now();
+}
+
+/// CustomPainter para dibujar el pulso/ripple exactamente bajo el dedo del usuario.
+class RipplePainter extends CustomPainter {
+  final List<ClickRippleEffect> ripples;
+
+  RipplePainter({required this.ripples});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final now = DateTime.now();
+    for (final ripple in ripples) {
+      final elapsed = now.difference(ripple.startTime).inMilliseconds;
+      if (elapsed > 450) continue;
+      final progress = (elapsed / 450.0).clamp(0.0, 1.0);
+      final radius = ripple.maxRadius * (0.2 + 0.8 * progress);
+      final opacity = (1.0 - progress).clamp(0.0, 1.0);
+
+      // Aro exterior expansivo
+      final strokePaint = Paint()
+        ..color = ripple.color.withOpacity(opacity * 0.85)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 3.0 * (1.0 - progress * 0.5);
+      canvas.drawCircle(ripple.position, radius, strokePaint);
+
+      // Resplandor interior suave
+      final fillPaint = Paint()
+        ..color = ripple.color.withOpacity(opacity * 0.3)
+        ..style = PaintingStyle.fill;
+      canvas.drawCircle(ripple.position, radius * 0.65, fillPaint);
+
+      // Núcleo central blanco brillante
+      final corePaint = Paint()
+        ..color = Colors.white.withOpacity(opacity * 0.95)
+        ..style = PaintingStyle.fill;
+      canvas.drawCircle(
+          ripple.position, 3.5 * (1.0 - progress * 0.3), corePaint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant RipplePainter oldDelegate) => true;
 }

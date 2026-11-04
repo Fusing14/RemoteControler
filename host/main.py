@@ -17,6 +17,11 @@ if sys.platform == "win32":
         sys.stdout.reconfigure(encoding="utf-8")
     except Exception:
         pass
+    try:
+        from host.engine.handlers.mouse import make_process_dpi_aware
+        make_process_dpi_aware()
+    except Exception:
+        pass
 
 from host.core.storage.device_store import TrustedDeviceStore
 from host.core.storage.pairing import PairingManager

@@ -53,6 +53,8 @@ class RemoteControlClient {
   final StreamController<DeckConnectionState> _stateController =
       StreamController<DeckConnectionState>.broadcast();
 
+  final Map<String, List<Completer<Map<String, dynamic>>>>
+      _pendingCommandCompleters = {};
   Completer<Map<String, dynamic>>? _activeCommandCompleter;
 
   int _reconnectAttempts = 0;
@@ -172,6 +174,20 @@ class RemoteControlClient {
         return;
       }
 
+      if (cmdId != null && _pendingCommandCompleters.containsKey(cmdId)) {
+        final list = _pendingCommandCompleters[cmdId];
+        if (list != null && list.isNotEmpty) {
+          final completer = list.removeAt(0);
+          if (_activeCommandCompleter == completer) {
+            _activeCommandCompleter = null;
+          }
+          if (!completer.isCompleted) {
+            completer.complete(jsonMap);
+          }
+          return;
+        }
+      }
+
       if (_activeCommandCompleter != null &&
           !_activeCommandCompleter!.isCompleted) {
         _activeCommandCompleter!.complete(jsonMap);
@@ -197,6 +213,18 @@ class RemoteControlClient {
     _subscription?.cancel();
     _subscription = null;
     _channel = null;
+
+    for (final list in _pendingCommandCompleters.values) {
+      for (final completer in list) {
+        if (!completer.isCompleted) {
+          completer.completeError(
+            const NetworkConnectionException(
+                'Conexión cerrada durante la espera de respuesta.'),
+          );
+        }
+      }
+    }
+    _pendingCommandCompleters.clear();
 
     if (_activeCommandCompleter != null &&
         !_activeCommandCompleter!.isCompleted) {
@@ -247,18 +275,13 @@ class RemoteControlClient {
           'No hay conexión activa con el Host.');
     }
 
-    if (_activeCommandCompleter != null &&
-        !_activeCommandCompleter!.isCompleted) {
-      throw const NetworkConnectionException(
-          'Ya hay una petición en tránsito.');
-    }
-
     final envelopeJson = await envelopeBuilder.buildSignedEnvelopeJson(
       commandId: commandId,
       payload: payload,
     );
 
     final completer = Completer<Map<String, dynamic>>();
+    _pendingCommandCompleters.putIfAbsent(commandId, () => []).add(completer);
     _activeCommandCompleter = completer;
 
     _channel!.sink.add(envelopeJson);
@@ -266,12 +289,35 @@ class RemoteControlClient {
     return completer.future.timeout(
       timeout,
       onTimeout: () {
+        final list = _pendingCommandCompleters[commandId];
+        list?.remove(completer);
         if (_activeCommandCompleter == completer) {
           _activeCommandCompleter = null;
         }
         throw const NetworkConnectionException(
             'Timeout esperando respuesta del Host.');
       },
+    );
+  }
+
+  /// Envía una interacción de ratón (clic, doble clic, clic derecho o movimiento)
+  /// con coordenadas normalizadas en el rango [0.0, 1.0].
+  Future<Map<String, dynamic>> sendMouseClick({
+    required double x,
+    required double y,
+    required String button,
+    int? monitorIndex,
+    Duration timeout = const Duration(seconds: 4),
+  }) async {
+    return await sendCommand(
+      commandId: 'MOUSE_CLICK',
+      payload: {
+        'x': x.clamp(0.0, 1.0),
+        'y': y.clamp(0.0, 1.0),
+        'button': button,
+        if (monitorIndex != null) 'monitor_index': monitorIndex,
+      },
+      timeout: timeout,
     );
   }
 

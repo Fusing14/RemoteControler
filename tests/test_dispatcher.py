@@ -123,6 +123,60 @@ def test_dispatcher_media_previous(test_setup):
         assert mock_prev.called
 
 
+@patch("host.engine.dispatcher.execute_mouse_click")
+def test_dispatcher_mouse_click(mock_mouse, test_setup):
+    """Verifica el despacho exitoso del comando MOUSE_CLICK con coordenadas normalizadas."""
+    mock_mouse.return_value = {
+        "status": "success",
+        "target_x": 960,
+        "target_y": 540,
+        "button": "left",
+        "monitor_index": 1,
+    }
+    dispatcher = test_setup["dispatcher"]
+    payload = {"x": 0.5, "y": 0.5, "button": "left", "monitor_index": 1}
+
+    envelope = create_envelope(test_setup, CommandCatalog.MOUSE_CLICK, payload)
+    result = dispatcher.dispatch(envelope)
+
+    assert result.status == ExecutionStatus.SUCCESS
+    assert result.command_id == CommandCatalog.MOUSE_CLICK.value
+    assert "960" in result.message
+    assert mock_mouse.called
+    mock_mouse.assert_called_with(x_norm=0.5, y_norm=0.5, button="left", monitor_index=1)
+
+
+@patch("host.engine.dispatcher.execute_mouse_click")
+def test_dispatcher_screen_interact(mock_mouse, test_setup):
+    """Verifica el despacho exitoso del alias SCREEN_INTERACT."""
+    mock_mouse.return_value = {
+        "status": "success",
+        "target_x": 100,
+        "target_y": 200,
+        "button": "double_left",
+        "monitor_index": 2,
+    }
+    dispatcher = test_setup["dispatcher"]
+    payload = {"x": 0.1, "y": 0.2, "button": "double_left", "monitor_index": 2}
+
+    envelope = create_envelope(test_setup, CommandCatalog.SCREEN_INTERACT, payload)
+    result = dispatcher.dispatch(envelope)
+
+    assert result.status == ExecutionStatus.SUCCESS
+    assert result.command_id == CommandCatalog.SCREEN_INTERACT.value
+    assert mock_mouse.called
+
+
+def test_dispatcher_mouse_click_invalid_coordinates_rejected(test_setup):
+    """Verifica que coordenadas normalizadas fuera de [0.0, 1.0] son rechazadas criptográficamente."""
+    dispatcher = test_setup["dispatcher"]
+    payload = {"x": 1.5, "y": 0.5, "button": "left"}
+
+    envelope = create_envelope(test_setup, CommandCatalog.MOUSE_CLICK, payload)
+    with pytest.raises(InvalidPayloadError):
+        dispatcher.dispatch(envelope)
+
+
 @patch("host.engine.dispatcher.execute_power_command")
 def test_dispatcher_success_power_flow(mock_power, test_setup):
     """Prueba de flujo exitoso completo para un comando de energía."""

@@ -15,7 +15,21 @@ from host.engine.contracts.commands import (
     PowerPayload,
     AppPlatform,
     AppLaunchPayload,
+    MouseClickPayload,
 )
+from host.engine.handlers.mouse import (
+    map_normalized_to_screen_pixel,
+    execute_mouse_click,
+    get_monitor_geometry,
+    make_process_dpi_aware,
+    MOUSEEVENTF_LEFTDOWN,
+    MOUSEEVENTF_LEFTUP,
+    MOUSEEVENTF_RIGHTDOWN,
+    MOUSEEVENTF_RIGHTUP,
+    MOUSEEVENTF_MIDDLEDOWN,
+    MOUSEEVENTF_MIDDLEUP,
+)
+from pydantic import ValidationError
 from host.engine.handlers.media import (
     execute_media_command,
     send_virtual_key,
@@ -195,3 +209,126 @@ def test_steam_launch_failure_code(mock_shell_exec):
     payload = AppLaunchPayload(platform=AppPlatform.STEAM, app_id=999999)
     with pytest.raises(AppLaunchError):
         execute_app_command(payload)
+
+
+# ==========================================
+# Pruebas de Mouse Handler (Touch-to-Mouse 1:1)
+# ==========================================
+
+def test_mouse_coordinate_mapping_corners_and_center():
+    """Verifica el mapeo matemático de esquinas y centro en monitor estándar."""
+    # Monitor 1920x1080 en origen (0, 0)
+    # (0.0, 0.0) -> (0, 0)
+    tx, ty = map_normalized_to_screen_pixel(0.0, 0.0, 0, 0, 1920, 1080)
+    assert tx == 0
+    assert ty == 0
+
+    # (1.0, 1.0) -> (1919, 1079)
+    tx, ty = map_normalized_to_screen_pixel(1.0, 1.0, 0, 0, 1920, 1080)
+    assert tx == 1919
+    assert ty == 1079
+
+    # (0.5, 0.5) -> (960, 540)
+    tx, ty = map_normalized_to_screen_pixel(0.5, 0.5, 0, 0, 1920, 1080)
+    assert tx == 960
+    assert ty == 540
+
+
+def test_mouse_coordinate_mapping_multimonitor_offsets():
+    """Verifica el cálculo de píxeles con offsets de multimonitor (monitor secundario desplazado)."""
+    # Monitor secundario: left=2560, top=165, width=1920, height=1080
+    tx, ty = map_normalized_to_screen_pixel(0.0, 0.0, 2560, 165, 1920, 1080)
+    assert tx == 2560
+    assert ty == 165
+
+    tx, ty = map_normalized_to_screen_pixel(1.0, 1.0, 2560, 165, 1920, 1080)
+    assert tx == 2560 + 1919
+    assert ty == 165 + 1079
+
+    tx, ty = map_normalized_to_screen_pixel(0.5, 0.5, 2560, 165, 1920, 1080)
+    assert tx == 2560 + 960
+    assert ty == 165 + 540
+
+
+def test_mouse_coordinate_mapping_negative_offset():
+    """Verifica el mapeo con monitor ubicado a la izquierda de la pantalla principal (offset negativo)."""
+    # Monitor secundario a la izquierda: left=-1920, top=0, width=1920, height=1080
+    tx, ty = map_normalized_to_screen_pixel(0.0, 0.0, -1920, 0, 1920, 1080)
+    assert tx == -1920
+    assert ty == 0
+
+    tx, ty = map_normalized_to_screen_pixel(1.0, 1.0, -1920, 0, 1920, 1080)
+    assert tx == -1
+    assert ty == 1079
+
+
+def test_mouse_coordinate_clamping():
+    """Verifica que valores fuera de [0.0, 1.0] se clampean defensivamente."""
+    tx, ty = map_normalized_to_screen_pixel(-0.5, 1.5, 0, 0, 1920, 1080)
+    assert tx == 0
+    assert ty == 1079
+
+
+def test_mouse_payload_validation():
+    """Verifica la validación estricta de esquemas Pydantic y rangos [0.0, 1.0]."""
+    # Válido
+    p = MouseClickPayload(x=0.25, y=0.75, button="left", monitor_index=1)
+    assert p.x == 0.25
+    assert p.y == 0.75
+    assert p.button == "left"
+
+    # Coordenadas fuera de rango -> ValidationError
+    with pytest.raises(ValidationError):
+        MouseClickPayload(x=1.01, y=0.5)
+
+    with pytest.raises(ValidationError):
+        MouseClickPayload(x=-0.01, y=0.5)
+
+    with pytest.raises(ValidationError):
+        MouseClickPayload(x=0.5, y=1.5)
+
+    # Botón no permitido -> ValidationError
+    with pytest.raises(ValidationError):
+        MouseClickPayload(x=0.5, y=0.5, button="triple_click")
+
+    # Extra fields prohibidos (CWE-20 Zero-Trust) -> ValidationError
+    with pytest.raises(ValidationError):
+        MouseClickPayload(x=0.5, y=0.5, button="left", extra_arbitrary="payload")
+
+
+@patch("host.engine.handlers.mouse.get_monitor_geometry")
+@patch("host.engine.handlers.mouse._send_mouse_event")
+@patch("ctypes.windll.user32.SetCursorPos", create=True)
+def test_execute_mouse_click_actions(mock_set_cursor, mock_send_event, mock_geom):
+    """Verifica la ejecución de clics 'left', 'right', 'double_left' y 'move'."""
+    mock_geom.return_value = {"left": 0, "top": 0, "width": 1920, "height": 1080}
+
+    # Clic izquierdo
+    res_left = execute_mouse_click(0.5, 0.5, button="left", monitor_index=1)
+    assert res_left["status"] == "success"
+    assert res_left["target_x"] == 960
+    assert res_left["target_y"] == 540
+    assert mock_set_cursor.called
+    assert mock_send_event.call_count == 2  # DOWN + UP
+
+    # Clic derecho
+    mock_send_event.reset_mock()
+    res_right = execute_mouse_click(0.0, 0.0, button="right", monitor_index=1)
+    assert res_right["status"] == "success"
+    assert res_right["target_x"] == 0
+    assert res_right["target_y"] == 0
+    assert mock_send_event.call_count == 2
+
+    # Doble clic izquierdo
+    mock_send_event.reset_mock()
+    res_double = execute_mouse_click(1.0, 1.0, button="double_left", monitor_index=1)
+    assert res_double["status"] == "success"
+    assert res_double["target_x"] == 1919
+    assert res_double["target_y"] == 1079
+    assert mock_send_event.call_count == 4  # (DOWN + UP) * 2
+
+    # Movimiento sin clic
+    mock_send_event.reset_mock()
+    res_move = execute_mouse_click(0.2, 0.8, button="move", monitor_index=1)
+    assert res_move["status"] == "success"
+    assert mock_send_event.call_count == 0
