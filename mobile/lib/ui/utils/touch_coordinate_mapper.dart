@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'dart:typed_data';
 
 /// Punto con coordenadas normalizadas en el rango [0.0, 1.0].
 class NormalizedPoint {
@@ -83,5 +84,56 @@ class TouchCoordinateMapper {
     final double yNorm = ((sceneY - dy) / renderedHeight).clamp(0.0, 1.0);
 
     return NormalizedPoint(xNorm, yNorm);
+  }
+
+  /// Extrae las dimensiones reales (width, height) directamente de la cabecera binaria JPEG (SOF0/SOF1/SOF2).
+  /// Garantiza que el aspect ratio de la imagen se actualice dinámicamente en cada fotograma.
+  static ({int width, int height})? extractJpegDimensions(Uint8List bytes) {
+    if (bytes.length < 4 || bytes[0] != 0xFF || bytes[1] != 0xD8) {
+      return null;
+    }
+
+    int offset = 2;
+    while (offset + 8 < bytes.length) {
+      if (bytes[offset] != 0xFF) {
+        offset++;
+        continue;
+      }
+
+      final int marker = bytes[offset + 1];
+      if (marker == 0xFF) {
+        offset++;
+        continue;
+      }
+
+      // Marcadores sin longitud de segmento (RSTn, SOI, EOI, TEM)
+      if (marker == 0xD8 ||
+          marker == 0xD9 ||
+          marker == 0x01 ||
+          (marker >= 0xD0 && marker <= 0xD7)) {
+        offset += 2;
+        continue;
+      }
+
+      if (offset + 3 >= bytes.length) break;
+      final int segmentLength = (bytes[offset + 2] << 8) | bytes[offset + 3];
+      if (segmentLength < 2) break;
+
+      // Marcadores Start Of Frame (SOF0 = 0xC0, SOF1 = 0xC1, SOF2 = 0xC2)
+      if (marker == 0xC0 || marker == 0xC1 || marker == 0xC2) {
+        if (offset + 8 < bytes.length) {
+          final int height = (bytes[offset + 5] << 8) | bytes[offset + 6];
+          final int width = (bytes[offset + 7] << 8) | bytes[offset + 8];
+          if (width > 0 && height > 0) {
+            return (width: width, height: height);
+          }
+        }
+        break;
+      }
+
+      offset += 2 + segmentLength;
+    }
+
+    return null;
   }
 }

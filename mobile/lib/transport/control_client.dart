@@ -174,18 +174,21 @@ class RemoteControlClient {
         return;
       }
 
-      if (cmdId != null && _pendingCommandCompleters.containsKey(cmdId)) {
+      if (cmdId != null) {
         final list = _pendingCommandCompleters[cmdId];
         if (list != null && list.isNotEmpty) {
           final completer = list.removeAt(0);
+          if (list.isEmpty) {
+            _pendingCommandCompleters.remove(cmdId);
+          }
           if (_activeCommandCompleter == completer) {
             _activeCommandCompleter = null;
           }
           if (!completer.isCompleted) {
             completer.complete(jsonMap);
           }
-          return;
         }
+        return;
       }
 
       if (_activeCommandCompleter != null &&
@@ -284,20 +287,28 @@ class RemoteControlClient {
     _pendingCommandCompleters.putIfAbsent(commandId, () => []).add(completer);
     _activeCommandCompleter = completer;
 
-    _channel!.sink.add(envelopeJson);
+    try {
+      _channel!.sink.add(envelopeJson);
 
-    return completer.future.timeout(
-      timeout,
-      onTimeout: () {
-        final list = _pendingCommandCompleters[commandId];
-        list?.remove(completer);
-        if (_activeCommandCompleter == completer) {
-          _activeCommandCompleter = null;
+      return await completer.future.timeout(
+        timeout,
+        onTimeout: () {
+          throw const NetworkConnectionException(
+              'Timeout esperando respuesta del Host.');
+        },
+      );
+    } finally {
+      final list = _pendingCommandCompleters[commandId];
+      if (list != null) {
+        list.remove(completer);
+        if (list.isEmpty) {
+          _pendingCommandCompleters.remove(commandId);
         }
-        throw const NetworkConnectionException(
-            'Timeout esperando respuesta del Host.');
-      },
-    );
+      }
+      if (_activeCommandCompleter == completer) {
+        _activeCommandCompleter = null;
+      }
+    }
   }
 
   /// Envía una interacción de ratón (clic, doble clic, clic derecho o movimiento)

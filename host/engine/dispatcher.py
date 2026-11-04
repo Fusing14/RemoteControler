@@ -321,7 +321,7 @@ class CommandDispatcher:
                 message="No se pudo cerrar la aplicación solicitada.",
                 error_code="APP_CLOSE_FAILED"
             )
-        except (MediaExecutionError, PowerExecutionError, AppLaunchError, ScreenCaptureError, CameraCaptureError, AudioStreamError, UnlockExecutionError) as e:
+        except (MediaExecutionError, PowerExecutionError, AppLaunchError, ScreenCaptureError, CameraCaptureError, AudioStreamError, UnlockExecutionError, MouseExecutionError) as e:
             logger.error("Error durante la ejecución del handler Win32: %s", e)
             return ExecutionResult(
                 status=ExecutionStatus.ERROR,

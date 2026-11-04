@@ -1,15 +1,12 @@
 /// Servicio de actualización automática dentro de la app (In-App OTA Updater).
 /// Consulta los releases públicos de GitHub, descarga el APK en streaming y
-/// ejecuta la instalación nativa controlada mediante MethodChannel y FileProvider.
+/// ejecuta la instalación nativa controlada mediante UpdaterPlatformAdapter.
 library;
 
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'package:flutter/foundation.dart';
-import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
-import 'package:package_info_plus/package_info_plus.dart';
 
 /// Estados posibles durante el proceso de actualización OTA.
 enum OtaStatus {
@@ -44,50 +41,72 @@ class UpdateInfo {
   });
 }
 
+/// Contrato de plataforma para desacoplar UpdaterService de plugins de Flutter
+/// y permitir pruebas unitarias en Dart puro sin depender del binario de Flutter.
+abstract class UpdaterPlatformAdapter {
+  Future<({String version, String buildNumber})> getInstalledVersion();
+  Future<String?> installApk(String filePath);
+  Future<void> showUpdateNotification(UpdateInfo info);
+}
+
+/// Implementación por defecto sin dependencias de plugins nativos (para tests y CLI).
+class DefaultUpdaterPlatformAdapter implements UpdaterPlatformAdapter {
+  final String version;
+  final String buildNumber;
+  final String? installResult;
+
+  const DefaultUpdaterPlatformAdapter({
+    this.version = '1.0.0',
+    this.buildNumber = '1',
+    this.installResult = 'INSTALL_STARTED',
+  });
+
+  @override
+  Future<({String version, String buildNumber})> getInstalledVersion() async {
+    return (version: version, buildNumber: buildNumber);
+  }
+
+  @override
+  Future<String?> installApk(String filePath) async {
+    return installResult;
+  }
+
+  @override
+  Future<void> showUpdateNotification(UpdateInfo info) async {}
+}
+
 class UpdaterService {
   static const String _defaultReleasesUrl =
       'https://api.github.com/repos/Fusing14/RemoteControler/releases/latest';
-  static const MethodChannel _installerChannel =
-      MethodChannel('com.remotecontroler.securedeck/installer');
-  static const MethodChannel _updaterChannel =
-      MethodChannel('com.remotecontroler.securedeck/updater');
 
   final http.Client _httpClient;
   final String _releasesUrl;
+  final UpdaterPlatformAdapter _platformAdapter;
   bool _isUpdating = false;
 
   UpdaterService({
     http.Client? httpClient,
     String? releasesUrl,
+    UpdaterPlatformAdapter? platformAdapter,
   })  : _httpClient = httpClient ?? http.Client(),
-        _releasesUrl = releasesUrl ?? _defaultReleasesUrl;
+        _releasesUrl = releasesUrl ?? _defaultReleasesUrl,
+        _platformAdapter =
+            platformAdapter ?? const DefaultUpdaterPlatformAdapter();
 
   /// Muestra una notificación nativa en el sistema informando de la actualización disponible.
   Future<void> showUpdateNotification(UpdateInfo info) async {
-    if (!Platform.isAndroid || !info.hasUpdate) return;
-    try {
-      await _updaterChannel.invokeMethod('showUpdateNotification', {
-        'title': 'Actualización disponible (v${info.latestVersion})',
-        'message':
-            'Una nueva versión de SecureDeck está disponible para instalar.',
-        'downloadUrl': info.downloadUrl,
-      });
-    } catch (e) {
-      debugPrint('[UpdaterService] No se pudo mostrar notificación nativa: $e');
-    }
+    if (!info.hasUpdate) return;
+    await _platformAdapter.showUpdateNotification(info);
   }
 
   /// Consulta la versión instalada y la compara con la última publicada en GitHub Releases.
   Future<UpdateInfo> checkForUpdate() async {
-    final packageInfo = await PackageInfo.fromPlatform();
+    final packageInfo = await _platformAdapter.getInstalledVersion();
     final currentVersion = packageInfo.version;
     final currentBuild = packageInfo.buildNumber;
     final fullCurrent = currentBuild.isNotEmpty
         ? '$currentVersion+$currentBuild'
         : currentVersion;
-
-    debugPrint(
-        '[UpdaterService] Comprobando actualizaciones... Versión instalada: $fullCurrent');
 
     final response = await _httpClient.get(
       Uri.parse(_releasesUrl),
@@ -117,8 +136,6 @@ class UpdaterService {
         final url = asset['browser_download_url'] as String? ?? '';
         if (name == 'app-release.apk' && url.startsWith('https://')) {
           apkDownloadUrl = url;
-          debugPrint(
-              '[UpdaterService] Encontrado asset oficial app-release.apk: $url');
           break;
         }
       }
@@ -133,8 +150,6 @@ class UpdaterService {
           if (name.toLowerCase().endsWith('.apk') &&
               url.startsWith('https://')) {
             apkDownloadUrl = url;
-            debugPrint(
-                '[UpdaterService] Encontrado asset APK alternativo: $name ($url)');
             break;
           }
         }
@@ -143,9 +158,6 @@ class UpdaterService {
 
     final hasUpdate =
         isNewerVersion(tagName, currentVersion) && apkDownloadUrl != null;
-
-    debugPrint(
-        '[UpdaterService] Resultado: instalada=$currentVersion, última=$tagName, hasUpdate=$hasUpdate, url=$apkDownloadUrl');
 
     return UpdateInfo(
       hasUpdate: hasUpdate,
@@ -171,8 +183,6 @@ class UpdaterService {
     if (uri == null ||
         !uri.isScheme('https') ||
         !cleanUrl.toLowerCase().endsWith('.apk')) {
-      debugPrint(
-          '[UpdaterService] Error: URL de descarga no válida (debe ser HTTPS y terminar en .apk): $cleanUrl');
       yield const OtaEvent(
         OtaStatus.INTERNAL_ERROR,
         'URL de descarga no válida (se requiere HTTPS terminado en .apk)',
@@ -233,12 +243,9 @@ class UpdaterService {
 
       yield const OtaEvent(OtaStatus.INSTALLING, '100');
 
-      // Invocar el instalador nativo seguro mediante MethodChannel
+      // Invocar el instalador nativo seguro mediante el adaptador de plataforma
       try {
-        final installResult = await _installerChannel.invokeMethod<String>(
-          'installApk',
-          {'filePath': apkFile.path},
-        );
+        final installResult = await _platformAdapter.installApk(apkFile.path);
 
         if (installResult == 'PERMISSION_REQUIRED') {
           yield const OtaEvent(
@@ -257,16 +264,12 @@ class UpdaterService {
           );
         }
       } catch (channelError) {
-        debugPrint(
-            '[UpdaterService] Error al invocar canal nativo installer: $channelError');
         yield OtaEvent(
           OtaStatus.INTERNAL_ERROR,
           'Error en el instalador nativo: $channelError',
         );
       }
-    } catch (e, stackTrace) {
-      debugPrint(
-          '[UpdaterService] Error en flujo de actualización: $e\n$stackTrace');
+    } catch (e) {
       yield OtaEvent(OtaStatus.INTERNAL_ERROR, e.toString());
     } finally {
       if (sink != null) {

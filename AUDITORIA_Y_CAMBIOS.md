@@ -108,3 +108,37 @@ Antes del commit final se ejecutó el bucle de verificación convergente (`VUELT
   - Re-ejecución completa de `py_compile` (59 archivos), `pytest` (**122 passed**), `dart analyze` (**0 issues**) y los 4 archivos de test de Dart (**21/21 passed**).
   - Modificaciones requeridas durante la Vuelta 2: **0 líneas**.
 
+---
+
+## 7. Arquitectura de Interacción Táctil 1:1 (Touch-to-Mouse Mapping) y Auditoría Post-Implementación
+
+### 7.1 Arquitectura Matemática y Nativa de Extremo a Extremo
+1. **Cliente Móvil (`mobile/lib/ui/utils/touch_coordinate_mapper.dart` + `screen_viewer_screen.dart`):**
+   - **Compensación de Escena (`InteractiveViewer`):** Convierte las coordenadas locales del toque a coordenadas de escena mediante `_transformationController.toScene(localPosition)` para deshacer cualquier nivel de zoom o paneo activo.
+   - **Compensación de `BoxFit.contain` (Letterboxing / Pillarboxing):** `TouchCoordinateMapper.calculateNormalizedCoordinates()` calcula el factor de escala real `containScale = min(containerW / imageW, containerH / imageH)`, el tamaño renderizado `(renderedW, renderedH)` y los márgenes de centrado `(dx, dy)`. Si el toque cae en las bandas negras exteriores, retorna `null` y lo descarta; si cae dentro del escritorio, proyecta al rango normalizado `[0.0, 1.0]`.
+   - **Sincronización Dinámica de Dimensiones JPEG:** Además de leer `width` y `height` de los metadatos de `SCREEN_FRAME`, `TouchCoordinateMapper.extractJpegDimensions()` analiza las cabeceras binarias JPEG (`SOF0`/`SOF1`/`SOF2`) de cada fotograma recibido para garantizar que `_imageWidth` y `_imageHeight` reflejen siempre el aspect ratio exacto del monitor activo.
+   - **Prevención de Conflictos de Gestos Multi-Touch:** Se incorporó seguimiento de punteros activos (`_activePointers`) mediante `Listener` y detección de cambio de matriz en `InteractiveViewer` (`_isMultiTouchGesture`, `_didPanOrZoomInGesture` y ventana de enfriamiento de `180ms` post-zoom/pan) para impedir que pellizcar o arrastrar la pantalla dispare clics accidentales.
+   - **Feedback Visual Reactivo:** `RipplePainter` dibuja ondas expansivas codificadas por color (Cyan para clic izquierdo, Esmeralda para doble clic, Violeta con vibración háptica para clic derecho).
+2. **Transporte Asíncrono Concurrente (`mobile/lib/transport/control_client.dart`):**
+   - Implementada cola FIFO de `Completer` indexada por `command_id` (`_pendingCommandCompleters`) con bloque `try / finally` que garantiza la limpieza determinista de listas y claves vacías tanto al completarse como en caso de timeout o desconexión, evitando que el bucle continuo de `SCREEN_FRAME` interfiera con los paquetes de `MOUSE_CLICK`.
+3. **Host Windows (`host/engine/handlers/mouse.py` + `commands.py` + `dispatcher.py`):**
+   - **Contrato Zero-Trust (`MouseClickPayload`):** Valida rangos estrictos `x, y ∈ [0.0, 1.0]`, acciones permitidas (`left`, `right`, `middle`, `double_left`, `move`) y `monitor_index ∈ [0, 16]`.
+   - **Conciencia de Escalado Físico (Per-Monitor DPI Aware V2):** `make_process_dpi_aware()` invoca `SetProcessDpiAwarenessContext(-4)` (con fallbacks a `SetProcessDpiAwareness(2)` y `SetProcessDPIAware()`) para evitar desvíos de coordenadas cuando Windows aplica escalados del 125%, 150% o 200%.
+   - **Mapeo Multimonitor y Sincronización de Escritorio:** `get_monitor_geometry(monitor_index)` obtiene el rectángulo exacto `(left, top, width, height)` del monitor en `mss`, `_sync_input_desktop()` acopla el hilo al escritorio de entrada activo de forma no bloqueante, `SetCursorPos(target_x, target_y)` posiciona el cursor en el píxel físico exacto y `_send_mouse_event()` inyecta los eventos `SendInput` (`dx=0, dy=0`) con pausa nativa de `15ms` en `double_left`.
+
+### 7.2 Registro del Bucle de Verificación Convergente Post-Mouse Mapping (`VUELTAS_LIMPIAS_CONSECUTIVAS == 2`)
+- **Correcciones aplicadas antes del bucle limpio:**
+  1. **`mobile/lib/services/updater_service.dart` + `flutter_updater_adapter.dart` + `mobile/test/updater_test.dart`:** Desacoplado `UpdaterService` de los plugins nativos de Flutter mediante la interfaz `UpdaterPlatformAdapter` (`DefaultUpdaterPlatformAdapter` en Dart puro y `FlutterUpdaterPlatformAdapter` en `deck_screen.dart`), solucionando el fallo de `updater_test.dart` en ejecución directa con Dart SDK.
+  2. **`mobile/lib/transport/control_client.dart`:** Añadido bloque `try / finally` en `sendCommand()` para eliminar fugas de memoria en `_pendingCommandCompleters` y aislado el enrutamiento por `cmdId` para que respuestas tardías nunca resuelvan completers de otro comando.
+  3. **`mobile/lib/ui/screens/screen_viewer_screen.dart` + `touch_coordinate_mapper.dart`:** Añadido bloqueo de clics durante/tras gestos de zoom o paneo (`Listener` + `InteractiveViewer.onInteraction*`) y parser binario de dimensiones JPEG (`extractJpegDimensions`).
+  4. **`host/engine/handlers/mouse.py` + `host/engine/dispatcher.py`:** Añadida sincronización no bloqueante con el escritorio de entrada (`_sync_input_desktop`), pausa nativa de `15ms` para `double_left` y captura explícita de `MouseExecutionError` en `CommandDispatcher`.
+- **Vuelta Limpia #1 (`VUELTAS_LIMPIAS_CONSECUTIVAS = 1`):**
+  - `py_compile`: **60/60 archivos Python compilados sin errores**.
+  - `pytest tests`: **131/131 tests en verde**.
+  - `dart analyze` + 6 suites en `mobile/test/` (`crypto_test.dart`, `pairing_test.dart`, `saved_hosts_test.dart`, `touch_coordinate_mapper_test.dart`, `updater_test.dart`, `zero_trust_wol_test.dart`): **0 issues, 35/35 tests en verde**.
+  - Modificaciones realizadas durante la Vuelta 1: **0 líneas**.
+- **Vuelta Limpia #2 (`VUELTAS_LIMPIAS_CONSECUTIVAS = 2`):**
+  - Re-ejecución íntegra de `py_compile` (**60/60 OK**), `pytest tests` (**131/131 passed**), `dart analyze` (**0 issues**) y las 6 suites de `mobile/test/` (**35/35 passed**).
+  - Modificaciones realizadas durante la Vuelta 2: **0 líneas**.
+
+

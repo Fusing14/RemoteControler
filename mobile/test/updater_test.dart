@@ -75,10 +75,21 @@ void main() {
       final updater = UpdaterService(
         httpClient: mockClient,
         releasesUrl: 'https://api.github.com/mock/releases/latest',
+        platformAdapter: const DefaultUpdaterPlatformAdapter(
+          version: '1.0.0',
+          buildNumber: '1',
+        ),
       );
 
-      // Verificamos que el mockClient y la URL funcionen sin excepciones
-      expect(updater, isNotNull);
+      final info = await updater.checkForUpdate();
+      expect(info.hasUpdate, isTrue);
+      expect(info.currentVersion, equals('1.0.0+1'));
+      expect(info.latestVersion, equals('1.0.1'));
+      expect(
+        info.downloadUrl,
+        equals('https://github.com/releases/download/v1.0.1/app-release.apk'),
+      );
+      expect(info.releaseNotes, equals('Nuevas funciones de seguridad y OTA.'));
     });
 
     test('Instancia OtaStatus y OtaEvent correctamente', () {

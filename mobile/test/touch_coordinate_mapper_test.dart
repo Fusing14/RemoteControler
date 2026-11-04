@@ -1,3 +1,4 @@
+import 'dart:typed_data';
 import 'package:test/test.dart';
 import 'package:remote_controler_mobile/ui/utils/touch_coordinate_mapper.dart';
 
@@ -205,6 +206,32 @@ void main() {
       expect(edge, isNotNull);
       expect(edge!.x, equals(1.0));
       expect(edge.y, equals(1.0));
+    });
+
+    test('Extracción de dimensiones reales desde cabecera binaria JPEG (SOF0)',
+        () {
+      // Construir cabecera JPEG mínima con marcador SOI (FF D8), APP0 (FF E0) y SOF0 (FF C0) para 1920x1080
+      // 1920 = 0x0780, 1080 = 0x0438
+      final jpegBytes = Uint8List.fromList([
+        0xFF, 0xD8, // SOI
+        0xFF, 0xE0, 0x00, 0x04, 0x00, 0x00, // APP0 dummy (len 4)
+        0xFF, 0xC0, 0x00, 0x11, 0x08, // SOF0 marker + len + precision
+        0x04, 0x38, // Height = 1080
+        0x07, 0x80, // Width = 1920
+        0x03, 0x01, 0x22, 0x00,
+      ]);
+
+      final dims = TouchCoordinateMapper.extractJpegDimensions(jpegBytes);
+      expect(dims, isNotNull);
+      expect(dims!.width, equals(1920));
+      expect(dims.height, equals(1080));
+
+      // Bytes inválidos deben devolver null de forma segura
+      expect(
+        TouchCoordinateMapper.extractJpegDimensions(
+            Uint8List.fromList([1, 2, 3])),
+        isNull,
+      );
     });
   });
 }

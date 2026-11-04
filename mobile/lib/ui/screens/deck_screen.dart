@@ -13,6 +13,7 @@ import 'camera_viewer_screen.dart';
 import 'games_screen.dart';
 import 'apps_screen.dart';
 import '../../services/updater_service.dart';
+import '../../services/flutter_updater_adapter.dart';
 import '../../services/wol_service.dart';
 import '../../services/saved_hosts_service.dart';
 import 'hosts_manager_screen.dart';
@@ -40,7 +41,9 @@ class _DeckScreenState extends State<DeckScreen> with WidgetsBindingObserver {
   RemoteControlClient? _controlClient;
   StreamSubscription<DeckConnectionState>? _stateSubscription;
   DeckConnectionState _connectionState = DeckConnectionState.disconnected;
-  final UpdaterService _updaterService = UpdaterService();
+  final UpdaterService _updaterService = UpdaterService(
+    platformAdapter: const FlutterUpdaterPlatformAdapter(),
+  );
   late final SavedHostsService _savedHostsService =
       SavedHostsService(storage: widget.pairingClient.storage);
   late String _currentEndpoint = widget.hostEndpoint;

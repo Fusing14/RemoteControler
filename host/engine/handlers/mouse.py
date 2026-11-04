@@ -178,8 +178,34 @@ def map_normalized_to_screen_pixel(
     return target_x, target_y
 
 
+def _sync_input_desktop() -> bool:
+    """
+    Sincroniza el hilo actual con el escritorio de entrada activo de Windows (Default o Winlogon)
+    para evitar bloqueos o rechazos de permisos al inyectar eventos de ratón, sin bloquear el servidor.
+    """
+    if sys.platform != "win32":
+        return True
+
+    try:
+        u32 = ctypes.windll.user32
+        # GENERIC_ALL (0x10000000) o DESKTOP_WRITEOBJECTS | DESKTOP_SWITCHDESKTOP (0x0180)
+        h_desk = u32.OpenInputDesktop(0, False, 0x10000000)
+        if not h_desk:
+            h_desk = u32.OpenInputDesktop(0, False, 0x0180)
+        if h_desk:
+            try:
+                u32.SetThreadDesktop(h_desk)
+            finally:
+                u32.CloseDesktop(h_desk)
+            return True
+    except Exception as e:
+        logger.debug("Aviso no bloqueante sincronizando escritorio de entrada: %s", e)
+
+    return False
+
+
 def _send_mouse_event(flags: int, dx: int = 0, dy: int = 0, data: int = 0) -> None:
-    """Envía un evento de ratón mediante SendInput con fallback atómico a mouse_event."""
+    """Envía un evento de ratón mediante SendInput (con dx=0, dy=0 tras SetCursorPos) y fallback a mouse_event."""
     if sys.platform != "win32":
         return
 
@@ -187,10 +213,10 @@ def _send_mouse_event(flags: int, dx: int = 0, dy: int = 0, data: int = 0) -> No
     try:
         inp = INPUT()
         inp.type = INPUT_MOUSE
-        inp.union.mi.dx = dx
-        inp.union.mi.dy = dy
-        inp.union.mi.mouseData = data
-        inp.union.mi.dwFlags = flags
+        inp.union.mi.dx = int(dx)
+        inp.union.mi.dy = int(dy)
+        inp.union.mi.mouseData = int(data)
+        inp.union.mi.dwFlags = int(flags)
         inp.union.mi.time = 0
         inp.union.mi.dwExtraInfo = 0
 
@@ -200,10 +226,11 @@ def _send_mouse_event(flags: int, dx: int = 0, dy: int = 0, data: int = 0) -> No
     except Exception as e:
         logger.debug("SendInput falló o no soportado, probando mouse_event: %s", e)
 
-    # Fallback seguro a mouse_event
+    # Fallback seguro a mouse_event sin bloquear el hilo en caso de restricción UIPI/Winlogon
     try:
-        u32.mouse_event(flags, dx, dy, data, 0)
+        u32.mouse_event(int(flags), int(dx), int(dy), int(data), 0)
     except Exception as e:
+        logger.warning("Fallo controlado al inyectar mouse_event (%#x): %s", flags, e)
         raise MouseExecutionError(f"Fallo al inyectar mouse_event ({flags:#x}): {e}") from e
 
 
@@ -236,36 +263,37 @@ def execute_mouse_click(
     )
 
     btn = button.lower().strip()
+    if btn not in ("left", "right", "middle", "double_left", "move"):
+        raise ValueError(f"Acción de botón de ratón no reconocida: '{button}'")
 
     if sys.platform == "win32":
+        _sync_input_desktop()
         u32 = ctypes.windll.user32
 
         # 1. Posicionar el cursor exactamente en el píxel físico calculado
         try:
-            u32.SetCursorPos(target_x, target_y)
+            u32.SetCursorPos(int(target_x), int(target_y))
         except Exception as e:
             logger.warning("Error llamando a SetCursorPos(%d, %d): %s", target_x, target_y, e)
 
-        # 2. Inyectar eventos de botón
+        # 2. Inyectar eventos de botón con dx=0, dy=0 (sin desplazamiento relativo adicional)
         if btn == "left":
-            _send_mouse_event(MOUSEEVENTF_LEFTDOWN)
-            _send_mouse_event(MOUSEEVENTF_LEFTUP)
+            _send_mouse_event(MOUSEEVENTF_LEFTDOWN, dx=0, dy=0)
+            _send_mouse_event(MOUSEEVENTF_LEFTUP, dx=0, dy=0)
         elif btn == "double_left":
-            _send_mouse_event(MOUSEEVENTF_LEFTDOWN)
-            _send_mouse_event(MOUSEEVENTF_LEFTUP)
-            time.sleep(0.05)
-            _send_mouse_event(MOUSEEVENTF_LEFTDOWN)
-            _send_mouse_event(MOUSEEVENTF_LEFTUP)
+            _send_mouse_event(MOUSEEVENTF_LEFTDOWN, dx=0, dy=0)
+            _send_mouse_event(MOUSEEVENTF_LEFTUP, dx=0, dy=0)
+            time.sleep(0.015)  # Pausa nativa corta (15ms) para reconocimiento en File Explorer
+            _send_mouse_event(MOUSEEVENTF_LEFTDOWN, dx=0, dy=0)
+            _send_mouse_event(MOUSEEVENTF_LEFTUP, dx=0, dy=0)
         elif btn == "right":
-            _send_mouse_event(MOUSEEVENTF_RIGHTDOWN)
-            _send_mouse_event(MOUSEEVENTF_RIGHTUP)
+            _send_mouse_event(MOUSEEVENTF_RIGHTDOWN, dx=0, dy=0)
+            _send_mouse_event(MOUSEEVENTF_RIGHTUP, dx=0, dy=0)
         elif btn == "middle":
-            _send_mouse_event(MOUSEEVENTF_MIDDLEDOWN)
-            _send_mouse_event(MOUSEEVENTF_MIDDLEUP)
+            _send_mouse_event(MOUSEEVENTF_MIDDLEDOWN, dx=0, dy=0)
+            _send_mouse_event(MOUSEEVENTF_MIDDLEUP, dx=0, dy=0)
         elif btn == "move":
             pass
-        else:
-            raise ValueError(f"Acción de botón de ratón no reconocida: '{button}'")
 
     return {
         "status": "success",

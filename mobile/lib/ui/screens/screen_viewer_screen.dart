@@ -39,6 +39,13 @@ class _ScreenViewerScreenState extends State<ScreenViewerScreen>
   final TransformationController _transformationController =
       TransformationController();
 
+  // Control de gestos concurrentes para evitar clics accidentales durante zoom/pan
+  int _activePointers = 0;
+  bool _isMultiTouchGesture = false;
+  bool _didPanOrZoomInGesture = false;
+  Matrix4? _matrixAtInteractionStart;
+  DateTime _lastZoomOrPanEndTime = DateTime.fromMillisecondsSinceEpoch(0);
+
   // Lista de efectos visuales táctiles (ripple pulsante)
   final List<ClickRippleEffect> _ripples = [];
   Timer? _rippleTimer;
@@ -54,6 +61,8 @@ class _ScreenViewerScreenState extends State<ScreenViewerScreen>
   void dispose() {
     _isStreaming = false;
     _rippleTimer?.cancel();
+    _rippleTimer = null;
+    _ripples.clear();
     WidgetsBinding.instance.removeObserver(this);
     _transformationController.dispose();
     super.dispose();
@@ -104,12 +113,16 @@ class _ScreenViewerScreenState extends State<ScreenViewerScreen>
 
           if (frameB64 != null && mounted) {
             final bytes = base64Decode(frameB64);
+            final jpegDims = TouchCoordinateMapper.extractJpegDimensions(bytes);
             setState(() {
               _currentFrame = bytes;
               _monitorCount = detectedCount;
               if (w != null && h != null && w > 0 && h > 0) {
                 _imageWidth = w;
                 _imageHeight = h;
+              } else if (jpegDims != null) {
+                _imageWidth = jpegDims.width;
+                _imageHeight = jpegDims.height;
               }
               _latencyMs = stopwatch.elapsedMilliseconds;
               _isLoading = false;
@@ -177,12 +190,32 @@ class _ScreenViewerScreenState extends State<ScreenViewerScreen>
     });
   }
 
+  bool _hasMatrixChangedSignificantly(Matrix4? a, Matrix4 b) {
+    if (a == null) return false;
+    for (int i = 0; i < 16; i++) {
+      if ((a.storage[i] - b.storage[i]).abs() > 1.5) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   void _handleTouch({
     required Offset localPosition,
     required Size containerSize,
     required String button,
     required Color feedbackColor,
   }) {
+    // 0. Evitar clics accidentales si el usuario está haciendo o acaba de hacer pinch-to-zoom o pan
+    final elapsedSinceZoom =
+        DateTime.now().difference(_lastZoomOrPanEndTime).inMilliseconds;
+    if (_activePointers > 1 ||
+        _isMultiTouchGesture ||
+        _didPanOrZoomInGesture ||
+        elapsedSinceZoom < 180) {
+      return;
+    }
+
     // 1. Convertir coordenadas locales a escena (deshaciendo zoom y pan de InteractiveViewer)
     final scenePoint = _transformationController.toScene(localPosition);
 
@@ -459,62 +492,126 @@ class _ScreenViewerScreenState extends State<ScreenViewerScreen>
                         final containerSize =
                             Size(constraints.maxWidth, constraints.maxHeight);
 
-                        return GestureDetector(
-                          behavior: HitTestBehavior.opaque,
-                          onTapUp: (details) {
-                            _handleTouch(
-                              localPosition: details.localPosition,
-                              containerSize: containerSize,
-                              button: 'left',
-                              feedbackColor:
-                                  const Color(0xFF06B6D4), // Cyan brillante
-                            );
+                        return Listener(
+                          onPointerDown: (_) {
+                            _activePointers++;
+                            if (_activePointers > 1) {
+                              _isMultiTouchGesture = true;
+                              _lastZoomOrPanEndTime = DateTime.now();
+                            }
                           },
-                          onDoubleTapDown: (details) {
-                            _handleTouch(
-                              localPosition: details.localPosition,
-                              containerSize: containerSize,
-                              button: 'double_left',
-                              feedbackColor: const Color(
-                                  0xFF10B981), // Esmeralda brillante
-                            );
+                          onPointerUp: (_) {
+                            _activePointers =
+                                (_activePointers - 1).clamp(0, 10);
+                            if (_activePointers == 0) {
+                              if (_isMultiTouchGesture ||
+                                  _didPanOrZoomInGesture) {
+                                _lastZoomOrPanEndTime = DateTime.now();
+                              }
+                              _isMultiTouchGesture = false;
+                              _didPanOrZoomInGesture = false;
+                            }
                           },
-                          onLongPressStart: (details) {
-                            HapticFeedback.mediumImpact();
-                            _handleTouch(
-                              localPosition: details.localPosition,
-                              containerSize: containerSize,
-                              button: 'right',
-                              feedbackColor:
-                                  const Color(0xFF8B5CF6), // Violeta brillante
-                            );
+                          onPointerCancel: (_) {
+                            _activePointers =
+                                (_activePointers - 1).clamp(0, 10);
+                            if (_activePointers == 0) {
+                              _isMultiTouchGesture = false;
+                              _didPanOrZoomInGesture = false;
+                            }
                           },
-                          child: Stack(
-                            fit: StackFit.expand,
-                            children: [
-                              InteractiveViewer(
-                                transformationController:
-                                    _transformationController,
-                                minScale: 0.5,
-                                maxScale: 5.0,
-                                boundaryMargin: const EdgeInsets.all(32),
-                                child: Image.memory(
-                                  _currentFrame!,
-                                  gaplessPlayback: true,
-                                  fit: BoxFit.contain,
-                                  width: containerSize.width,
-                                  height: containerSize.height,
-                                ),
-                              ),
-                              if (_ripples.isNotEmpty)
-                                Positioned.fill(
-                                  child: IgnorePointer(
-                                    child: CustomPaint(
-                                      painter: RipplePainter(ripples: _ripples),
-                                    ),
+                          child: GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onTapUp: (details) {
+                              _handleTouch(
+                                localPosition: details.localPosition,
+                                containerSize: containerSize,
+                                button: 'left',
+                                feedbackColor:
+                                    const Color(0xFF06B6D4), // Cyan brillante
+                              );
+                            },
+                            onDoubleTapDown: (details) {
+                              _handleTouch(
+                                localPosition: details.localPosition,
+                                containerSize: containerSize,
+                                button: 'double_left',
+                                feedbackColor: const Color(
+                                    0xFF10B981), // Esmeralda brillante
+                              );
+                            },
+                            onLongPressStart: (details) {
+                              if (_activePointers > 1 ||
+                                  _isMultiTouchGesture ||
+                                  _didPanOrZoomInGesture) {
+                                return;
+                              }
+                              HapticFeedback.mediumImpact();
+                              _handleTouch(
+                                localPosition: details.localPosition,
+                                containerSize: containerSize,
+                                button: 'right',
+                                feedbackColor: const Color(
+                                    0xFF8B5CF6), // Violeta brillante
+                              );
+                            },
+                            child: Stack(
+                              fit: StackFit.expand,
+                              children: [
+                                InteractiveViewer(
+                                  transformationController:
+                                      _transformationController,
+                                  minScale: 0.5,
+                                  maxScale: 5.0,
+                                  boundaryMargin: const EdgeInsets.all(32),
+                                  onInteractionStart: (details) {
+                                    _matrixAtInteractionStart =
+                                        _transformationController.value.clone();
+                                    if (details.pointerCount > 1) {
+                                      _isMultiTouchGesture = true;
+                                      _lastZoomOrPanEndTime = DateTime.now();
+                                    }
+                                  },
+                                  onInteractionUpdate: (details) {
+                                    if (details.pointerCount > 1 ||
+                                        (details.scale - 1.0).abs() > 0.02) {
+                                      _isMultiTouchGesture = true;
+                                      _lastZoomOrPanEndTime = DateTime.now();
+                                    }
+                                    if (_hasMatrixChangedSignificantly(
+                                      _matrixAtInteractionStart,
+                                      _transformationController.value,
+                                    )) {
+                                      _didPanOrZoomInGesture = true;
+                                      _lastZoomOrPanEndTime = DateTime.now();
+                                    }
+                                  },
+                                  onInteractionEnd: (_) {
+                                    if (_isMultiTouchGesture ||
+                                        _didPanOrZoomInGesture) {
+                                      _lastZoomOrPanEndTime = DateTime.now();
+                                    }
+                                    _matrixAtInteractionStart = null;
+                                  },
+                                  child: Image.memory(
+                                    _currentFrame!,
+                                    gaplessPlayback: true,
+                                    fit: BoxFit.contain,
+                                    width: containerSize.width,
+                                    height: containerSize.height,
                                   ),
                                 ),
-                            ],
+                                if (_ripples.isNotEmpty)
+                                  Positioned.fill(
+                                    child: IgnorePointer(
+                                      child: CustomPaint(
+                                        painter:
+                                            RipplePainter(ripples: _ripples),
+                                      ),
+                                    ),
+                                  ),
+                              ],
+                            ),
                           ),
                         );
                       },
